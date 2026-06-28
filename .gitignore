@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+
+# Xcode project is generated from project.yml — regenerate with `xcodegen generate`
+*.xcodeproj/
+
+# Xcode build / user state
+DerivedData/
+build/
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# Swift Package Manager
+.swiftpm/
+.build/

@@ -1,0 +1,63 @@
+name: BombSquad
+options:
+  bundleIdPrefix: com.matsumotokaya
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    # Automatic signing with the unified "Apple Development" cert already in the
+    # keychain. Team matches the existing xtrust project so it signs cleanly.
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: TG68TFXG88
+    CODE_SIGNING_IDENTITY: "Apple Development"
+targets:
+  BombSquad:
+    type: application
+    platform: iOS
+    sources:
+      - BombSquad
+      - Shared
+      - Common
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.matsumotokaya.bombsquad
+        PRODUCT_NAME: BombSquad
+        CODE_SIGN_ENTITLEMENTS: BombSquad/BombSquad.entitlements
+        TARGETED_DEVICE_FAMILY: "1"
+    info:
+      path: BombSquad/Info.plist
+      properties:
+        CFBundleDisplayName: "BOMB SQUAD"
+        NSMicrophoneUsageDescription: "音声で下書きを作成するためにマイクを使用します。"
+        NSSpeechRecognitionUsageDescription: "話した内容をテキストに変換するために音声認識を使用します。"
+        UIBackgroundModes:
+          - audio
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        CFBundleURLTypes:
+          - CFBundleURLName: com.matsumotokaya.bombsquad
+            CFBundleURLSchemes:
+              - bombsquad
+    dependencies:
+      - target: BombSquadKeyboard
+  BombSquadKeyboard:
+    type: app-extension
+    platform: iOS
+    sources:
+      - BombSquadKeyboard
+      - Common
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.matsumotokaya.bombsquad.keyboard
+        PRODUCT_NAME: BombSquadKeyboard
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: BombSquadKeyboard/Info.plist
+        CODE_SIGN_ENTITLEMENTS: BombSquadKeyboard/BombSquadKeyboard.entitlements
+        TARGETED_DEVICE_FAMILY: "1"
