@@ -32,6 +32,8 @@ targets:
       path: BombSquad/Info.plist
       properties:
         CFBundleDisplayName: "BOMB SQUAD"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSMicrophoneUsageDescription: "音声で下書きを作成するためにマイクを使用します。"
         NSSpeechRecognitionUsageDescription: "話した内容をテキストに変換するために音声認識を使用します。"
         UIBackgroundModes:

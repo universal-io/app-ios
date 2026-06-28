@@ -105,7 +105,13 @@ final class SpeechService {
         status = .idle
 
         let final = transcript
-        if !final.isEmpty { onFinish?(final) }
+        onFinish?(final)
+    }
+
+    func resetTranscript() {
+        finalizedText = ""
+        volatileText = ""
+        onTranscriptUpdate?(finalizedText, volatileText)
     }
 
     // MARK: - Permissions

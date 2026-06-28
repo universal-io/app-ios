@@ -17,6 +17,9 @@ final class KeyboardViewController: UIInputViewController {
     private var startButton: UIButton!
     private var previewLabel: UILabel!
     private var livePollTimer: Timer?
+    private var activationStartedAt: Date?
+    private var stopRequested = false
+    private let activationGracePeriod: TimeInterval = 8
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -152,16 +155,34 @@ final class KeyboardViewController: UIInputViewController {
     /// the host app. The app is opened only once (the activation/unlock); while a
     /// background session is alive, Start acts as Stop and no app switch occurs.
     @objc private func toggleStart() {
-        if SharedStore.readLive() != nil {
-            // A session is running — stop it (no app switch).
-            SharedStore.requestStop()
+        if let live = SharedStore.readLive() {
+            if live.phase == .recording {
+                // Pause insertion while keeping the host app's audio session alive.
+                stopRequested = true
+                activationStartedAt = nil
+                SharedStore.requestPause()
+                setStartButton(recording: false)
+                previewLabel.text = "一時停止中…"
+            } else {
+                // Resume the already-unlocked background session without app switch.
+                stopRequested = false
+                activationStartedAt = nil
+                SharedStore.requestResume()
+                setStartButton(recording: true)
+                previewLabel.text = "再開中…"
+            }
+        } else if let activationStartedAt,
+                  Date().timeIntervalSince(activationStartedAt) < activationGracePeriod {
+            self.activationStartedAt = nil
             setStartButton(recording: false)
-            previewLabel.text = "停止しました"
+            previewLabel.text = "Start を押して話す"
         } else {
             // No session — open the app once to activate (cf. Wispr unlock).
             guard let url = URL(string: "bombsquad://record") else { return }
+            stopRequested = false
+            activationStartedAt = Date()
             setStartButton(recording: true)
-            previewLabel.text = "起動中…"
+            previewLabel.text = "BOMB SQUAD を起動中…"
             openContainerApp(url)
         }
     }
@@ -214,11 +235,38 @@ final class KeyboardViewController: UIInputViewController {
         guard let live = SharedStore.readLive() else {
             // Session ended: keep the shown text (commit it), don't delete.
             injectedVolatile = ""
-            previewLabel?.text = "Start を押して話す"
-            setStartButton(recording: false)
+            if let activationStartedAt,
+               Date().timeIntervalSince(activationStartedAt) < activationGracePeriod {
+                previewLabel?.text = "元のアプリに戻ると入力を開始します"
+                setStartButton(recording: true)
+            } else if stopRequested {
+                previewLabel?.text = "停止しました"
+                setStartButton(recording: false)
+                stopRequested = false
+                activationStartedAt = nil
+            } else {
+                previewLabel?.text = "Start を押して話す"
+                setStartButton(recording: false)
+                activationStartedAt = nil
+            }
             return
         }
-        setStartButton(recording: true)
+        activationStartedAt = nil
+
+        if live.phase == .paused {
+            clearInjectedVolatile()
+            previewLabel?.text = "Start で再開"
+            setStartButton(recording: false)
+            stopRequested = false
+            return
+        }
+
+        if stopRequested {
+            clearInjectedVolatile()
+            setStartButton(recording: false)
+            previewLabel?.text = "一時停止中…"
+            return
+        }
 
         // 1. Commit any newly finalized text, replacing the volatile tail.
         if live.finalized.count > live.consumed {
@@ -235,6 +283,7 @@ final class KeyboardViewController: UIInputViewController {
             injectedVolatile = live.volatile
         }
 
+        setStartButton(recording: true)
         previewLabel?.text = live.volatile.isEmpty ? "聞いています…（録音中）" : live.volatile
     }
 
@@ -247,6 +296,11 @@ final class KeyboardViewController: UIInputViewController {
 
     private func resetStartButton() {
         // Reflect whether a background session is currently alive.
-        setStartButton(recording: SharedStore.readLive() != nil)
+        let isRecording = SharedStore.readLive()?.phase == .recording
+        if isRecording {
+            activationStartedAt = nil
+            stopRequested = false
+        }
+        setStartButton(recording: isRecording)
     }
 }

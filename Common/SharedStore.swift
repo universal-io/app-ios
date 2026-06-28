@@ -18,9 +18,24 @@ enum SharedStore {
     }
     private static var liveURL: URL? { container?.appendingPathComponent("live.json") }
     private static var consumedURL: URL? { container?.appendingPathComponent("consumed.txt") }
+    private static var commandURL: URL? { container?.appendingPathComponent("command.txt") }
+    private static let liveStaleInterval: TimeInterval = 3
+
+    enum LivePhase: String, Codable {
+        case recording
+        case paused
+    }
+
+    enum Command: String {
+        case pause
+        case resume
+        case end
+    }
 
     private struct Live: Codable {
         var session: Double   // 0 == no active session
+        var updatedAt: Double
+        var phase: LivePhase
         var finalized: String
         var volatile: String
     }
@@ -29,26 +44,62 @@ enum SharedStore {
 
     /// Session id held in the (single) app process; written into every update.
     private static var currentSession: Double = 0
+    private static var currentPhase: LivePhase = .recording
+    private static var lastFinalized = ""
+    private static var lastVolatile = ""
 
     static func startLiveSession() {
         currentSession = Date().timeIntervalSince1970
-        writeLive(Live(session: currentSession, finalized: "", volatile: ""))
+        currentPhase = .recording
+        lastFinalized = ""
+        lastVolatile = ""
+        writeCurrentLive()
         writeConsumed(0)
     }
 
     static func endLiveSession() {
         currentSession = 0
-        writeLive(Live(session: 0, finalized: "", volatile: ""))
+        currentPhase = .paused
+        lastFinalized = ""
+        lastVolatile = ""
+        writeLive(Live(session: 0, updatedAt: Date().timeIntervalSince1970, phase: .paused, finalized: "", volatile: ""))
     }
 
     static func publishLive(finalized: String, volatile: String) {
         guard currentSession > 0 else { return }
-        writeLive(Live(session: currentSession, finalized: finalized, volatile: volatile))
+        currentPhase = .recording
+        lastFinalized = finalized
+        lastVolatile = volatile
+        writeCurrentLive()
+    }
+
+    static func heartbeatLiveSession() {
+        guard currentSession > 0 else { return }
+        writeCurrentLive()
+    }
+
+    static func pauseLiveSession() {
+        guard currentSession > 0 else { return }
+        currentPhase = .paused
+        lastFinalized = ""
+        lastVolatile = ""
+        writeConsumed(0)
+        writeCurrentLive()
+    }
+
+    static func resumeLiveSession() {
+        guard currentSession > 0 else { return }
+        currentPhase = .recording
+        lastFinalized = ""
+        lastVolatile = ""
+        writeConsumed(0)
+        writeCurrentLive()
     }
 
     // MARK: Keyboard side
 
     struct LiveState {
+        let phase: LivePhase
         let finalized: String
         let volatile: String
         let consumed: Int
@@ -56,11 +107,36 @@ enum SharedStore {
 
     static func readLive() -> LiveState? {
         guard let live = readLiveFile(), live.session > 0 else { return nil }
-        return LiveState(finalized: live.finalized, volatile: live.volatile, consumed: readConsumed())
+        guard Date().timeIntervalSince1970 - live.updatedAt <= liveStaleInterval else { return nil }
+        return LiveState(phase: live.phase, finalized: live.finalized, volatile: live.volatile, consumed: readConsumed())
     }
 
     static func setConsumed(_ count: Int) {
         writeConsumed(count)
+    }
+
+    static func requestPause() {
+        writeCommand(.pause)
+    }
+
+    static func requestResume() {
+        writeCommand(.resume)
+    }
+
+    static func requestEnd() {
+        writeCommand(.end)
+    }
+
+    static func readCommand() -> Command? {
+        guard let commandURL,
+              let string = try? String(contentsOf: commandURL, encoding: .utf8) else { return nil }
+        let name = string.split(separator: ":").first.map(String.init) ?? ""
+        return Command(rawValue: name)
+    }
+
+    static func clearCommand() {
+        guard let commandURL else { return }
+        try? Data("".utf8).write(to: commandURL, options: .atomic)
     }
 
     // MARK: Stop signal (keyboard -> background app)
@@ -77,6 +153,7 @@ enum SharedStore {
     static func clearStopRequest() {
         guard let stopURL else { return }
         try? Data("0".utf8).write(to: stopURL, options: .atomic)
+        clearCommand()
     }
 
     /// App: has a stop been requested?
@@ -91,6 +168,24 @@ enum SharedStore {
     private static func writeLive(_ live: Live) {
         guard let liveURL, let data = try? JSONEncoder().encode(live) else { return }
         try? data.write(to: liveURL, options: .atomic)
+    }
+
+    private static func writeCurrentLive() {
+        writeLive(
+            Live(
+                session: currentSession,
+                updatedAt: Date().timeIntervalSince1970,
+                phase: currentPhase,
+                finalized: lastFinalized,
+                volatile: lastVolatile
+            )
+        )
+    }
+
+    private static func writeCommand(_ command: Command) {
+        guard let commandURL else { return }
+        let payload = "\(command.rawValue):\(Date().timeIntervalSince1970)"
+        try? Data(payload.utf8).write(to: commandURL, options: .atomic)
     }
 
     private static func readLiveFile() -> Live? {

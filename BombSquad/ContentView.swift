@@ -12,6 +12,18 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
+            Group {
+                if shouldShowReturnGuide {
+                    activationReturnScreen
+                } else {
+                    mainContent
+                }
+            }
+            .navigationTitle(shouldShowReturnGuide ? "" : "BOMB SQUAD")
+        }
+    }
+
+    private var mainContent: some View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     header
@@ -56,8 +68,41 @@ struct ContentView: View {
                 }
                 .padding()
             }
-            .navigationTitle("BOMB SQUAD")
+    }
+
+    private var activationReturnScreen: some View {
+        VStack(spacing: 24) {
+            Spacer()
+
+            Image(systemName: "mic.circle.fill")
+                .font(.system(size: 64, weight: .semibold))
+                .foregroundStyle(.green)
+
+            VStack(spacing: 10) {
+                Text("録音中")
+                    .font(.largeTitle.bold())
+
+                Text("元のアプリに戻って話してください")
+                    .font(.title3)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(spacing: 8) {
+                Label("左上の ‹ アプリ名 を押す", systemImage: "arrow.left")
+                Label("または、下のバーを右へスワイプ", systemImage: "arrow.right")
+            }
+            .font(.headline)
+            .foregroundStyle(.primary)
+
+            Spacer()
+
+            Text("戻るとキーボードが入力欄へ反映します")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
     }
 
     private var speechCard: some View {
@@ -108,6 +153,10 @@ struct ContentView: View {
         case .denied: return "マイク許可が必要"
         case .unavailable(let m): return m
         }
+    }
+
+    private var shouldShowReturnGuide: Bool {
+        cameFromKeyboard && (speech.status == .preparing || speech.status == .listening)
     }
 
     private var header: some View {
