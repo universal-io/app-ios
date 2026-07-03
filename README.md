@@ -162,7 +162,7 @@ xcrun devicectl device process launch --device <UDID> com.matsumotokaya.bombsqua
    - 実装: 自前契約 `BombSquadService`（`transcribe` / `review`）を固定 → v1 は BYOK 実装（Groq/OpenAI/Anthropic 直叩き、キーは Keychain Sharing）。レビューは背面アプリで実行しステージングへ流す。レビュー発火トリガー（Mac 版の右 Shift ダブルタップ相当）を iOS でどう割り当てるか要設計。
 3. **シームレス化の磨き**：自動停止（無音検知）、戻り導線、UI。
 4. **完全自動復帰の継続調査**：現時点では勝ち筋が見えていない。private API に依存せずに成立するか、OS アップデートや他実装例を引き続き監視する。
-5. **受信側（transform）**：OS 横断で他アプリの受信文を読む public API は無い。Share/Action Extension で選択テキストを受け渡す形で段階導入（ブレスト段階）。
+5. **受信側（transform / 見る→わかる→返す）**：**優先度低と判断（2026-07-04）**。スマホでは汎用チャット AI がスクショ説明を代替できてしまい、「自律的にフォームを埋める」レベルに届かない中間実装は使われない。iOS の価値提供点は入力の瞬間＝キーボード拡張に集中する。実現経路の選択肢マップ（スクショ駆動 / Safari Web Extension / Broadcast+PiP 等）と判断の根拠は [docs/receiving-side-options.md](docs/receiving-side-options.md) に整理済み。波が来た時に再評価。
 
 ---
 
