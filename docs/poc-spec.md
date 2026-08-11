@@ -1,0 +1,144 @@
+# Universal I/O: macOS Copilot Screen for iOS (PoC Spec)
+
+作成: オーナー（2026-08-11）
+位置づけ: **何を作るかの定義。オーナーの意図の記録として原文を保持する。**
+
+> **⚠️ 実装前に [../HANDOFF.md](../HANDOFF.md) を読むこと。**
+> 本仕様の一部は、macOS版ですでに解決済みの問題を再定義しており、**そのまま実装すると
+> 既存資産を捨てることになる。** 具体的には次の4点が上書きされている。
+>
+> | 本仕様の記述 | 状態 | 正しい扱い |
+> |---|---|---|
+> | §2「VLM: OpenAI API (gpt-4o) または Gemini」 | **上書き** | クライアントはプロバイダを直接呼ばない。Gateway `POST /api/ai/vision` を使う。モデル名は `../app-mac/web/lib/server/ai-routing.ts` が正本（HANDOFF §1） |
+> | §5 Step 4「VLMClient.swift を実装」 | **上書き** | 同上。VLMクライアントは作らない |
+> | §4「box_2d による座標指定」 | **要再検討** | AX候補＋OCR実測の方が精度が高い。既存の正規化グリッドとも軸順が違う（HANDOFF §2） |
+> | §5 Step 1「UniversalIO_Mac を新規作成」 | **要再検討** | キャプチャ・AX走査・識別は `../app-mac` に実装済み（HANDOFF §3） |
+> | §3 F-1「同じApple ID上の端末が自動検出」 | **事実誤認** | MultipeerConnectivityはApple IDを使わない（HANDOFF §4-1） |
+>
+> コンセプト（§1）、2層レイヤー構造（§3 F-2）、タップ起点の解析（§3 F-3）、
+> オーバーレイ描画（§3 F-4）は**そのまま有効**である。
+
+---
+
+## 1. コンセプト・目的 (Executive Summary)
+
+**ビジョン：「こころに杖とメガネを」**
+
+本プロダクト（Universal I/O）は、認知特性・言語・スキル・知識の違いによるデジタル機器操作の
+衝突や困りごとを解消する認知拡張プラットフォームである。
+
+**プロダクトコンセプト**
+
+メインPC（macOS）の画面作業領域を一切妨げず、「手元のiPhone/iPad（iOS）を卓上の専用
+コパイロット（解説・ナビゲーション）モニター化する」。
+
+Macの画面をワイヤレスでリアルタイムミラーリングし、iOS側で「ここはどうすればいい？」
+「このボタンを押していい？」と画面をタップまたは質問すると、VLM（ビジョン言語モデル）が
+画面全体を解析。押すべきボタンの位置に枠線（ハイライト）を打ったり、吹き出しでガイド
+メッセージを表示する。
+
+```
+[ macOS (Host) ]
+  │ ScreenCaptureKit で画面キャプチャ & H.264圧縮
+  │ MultipeerConnectivity で自動P2Pワイヤレス送信
+  ▼
+[ iOS / iPadOS (Client) ] ── Universal I/O Copilot App
+  ├─ Base Layer : 低遅延 画面ストリーム再生
+  ├─ Overlay Layer : 透明 SwiftUI Canvas（AIガイド・吹き出し描画）
+  └─ Action : 画面タップ ➔ フレーム静止画を切り出して VLM へ送信
+             ➔ 座標にアノテーション描画
+```
+
+## 2. システムアーキテクチャ & 技術スタック
+
+- 開発環境: Xcode 15+, Swift 5.9+
+- **ホスト (macOS 14+)**: macOS Native App
+  - 画面キャプチャ: ScreenCaptureKit
+  - 動画エンコード: VideoToolbox (H.264 / HEVC)
+- **クライアント (iOS 17+)**: iOS / iPadOS App (SwiftUI)
+  - 映像描画: AVSampleBufferDisplayLayer（GPUハードウェアデコード）
+  - ガイド描画: SwiftUI Canvas / ZStack
+- **P2P 通信レイヤー**: MultipeerConnectivity
+- **VLM**: OpenAI API (gpt-4o) または Google Gemini API (gemini-1.5-flash)
+  → **上書き。冒頭の表を参照**
+
+## 3. 機能要件 (Functional Requirements)
+
+### F-1. P2P 自動接続 & 画面ストリーミング (Host & Client)
+
+**要件**: MacアプリとiOSアプリを起動すると、同じApple ID/同一ローカルネットワーク上の端末
+同士が自動検出・接続されること。→ **Apple IDの部分は事実誤認。冒頭の表を参照**
+
+**仕様**: Mac側の ScreenCaptureKit で取得した画面映像（1080p, 30fps）を、
+MultipeerConnectivity 経由でiOS側へ超低遅延（100ms以下目標）で送信用ストリームとして流す。
+
+### F-2. iOS側 2層レイヤー構造 (UI Architecture)
+
+**要件**: 映像表示面とAI描画面を分離したZStackレイヤー構造を構築する。
+
+- **Base Layer (Z-index: 0)**: Macから送られてくる画面ストリームを全画面表示（アスペクト比維持）
+- **Overlay Layer (Z-index: 1)**: 完全透明な SwiftUI Canvas。VLMから指定された座標に
+  枠線や吹き出しを描画する
+
+### F-3. タップ ➔ VLM解析トリガー (Interaction)
+
+**要件**: ユーザーがiOS画面上の任意の場所をタップ（または質問）した際、その瞬間の1フレームを
+画像として抽出し、VLMへ送信する。
+
+**仕様**:
+- タップ位置にアニメーション（波紋エフェクト）を表示
+- 現在表示中の CVPixelBuffer から JPEG/PNG 画像を生成
+- VLM APIへ「画像 + プロンプト + タップされた相対座標 (x, y)」を送信
+
+### F-4. AIガイド要素（アノテーション）のオーバーレイ描画 (Overlay Drawing)
+
+**要件**: VLMから返ってきた座標情報（Grounding / Bounding Box）をもとに、
+Overlay Layer上にガイドを描画する。
+
+**描画エレメント**:
+- **Highlight Box**: 押すべきボタンや注目箇所を囲むカラー枠線（点滅/発光アニメーション）
+- **Callout / Tooltip**: 枠線の近傍に表示する解説吹き出しテキスト
+
+## 4. データプロトコル & プロンプト設計
+
+VLMレスポンスフォーマット案 (JSON)。VLMへ「JSONモード」で出力させ、iOS側でそのまま
+パースして描画する。→ **既存スキーマとの関係は HANDOFF §2 を参照**
+
+```json
+{
+  "summary": "画面右下の『送信』ボタンを押す必要があります。",
+  "annotations": [
+    {
+      "id": "target_1",
+      "type": "highlight",
+      "box_2d": [620, 450, 670, 570],
+      "label": "ここをクリック",
+      "color": "#FF0055"
+    }
+  ]
+}
+```
+
+`box_2d` は `[ymin, xmin, ymax, xmax]`（0〜1000の正規化座標）。
+
+## 5. AIエージェント向け実装手順 (Implementation Steps)
+
+> **この順序は HANDOFF §6 で差し替えられている。**
+> 最大の未知数（MultipeerConnectivityの実測）を最初に置く順序に変更すること。
+
+**Step 1**: Xcode プロジェクト・ターゲットのセットアップ。シングルリポジトリ内で
+`UniversalIO_Mac` (macOS Target) と `UniversalIO_iOS` (iOS Target) を作成する。
+共通のモデル定義ファイル（`AnnotationModel.swift` 等）を両ターゲットで共有化する。
+
+**Step 2**: MultipeerConnectivity による接続 & 通信疎通。`PeerCommunicator.swift` を作成し、
+MacとiOS間で文字列（"PING/PONG"）および `Data` が相互送信できることを確認する。
+
+**Step 3**: Mac画面キャプチャ & iOSストリーミング描画。
+Mac側は ScreenCaptureKit でキャプチャした `CVPixelBuffer` を JPEG 圧縮して送信（簡易実装）、
+または VideoToolbox で H.264 エンコードして送信。
+iOS側は受信データから `AVSampleBufferDisplayLayer` を連続更新し、低遅延表示を確認。
+
+**Step 4**: SwiftUI Overlay & VLM API 連携。iOS側で画面タップ時に、その静止画とプロンプトを
+VLMへ送信する `VLMClient.swift` を実装。レスポンスの `box_2d` の正規化座標を iOSの画面サイズ
+（Points）に変換し、SwiftUI Canvas 上に `path.addRoundedRect` で枠線とテキスト描画を行う。
+→ **`VLMClient.swift` は作らない。Gateway経由。冒頭の表を参照**
