@@ -25,12 +25,16 @@ Macの作業領域を1ピクセルも占有しないのが要点。
 
 ### 必読・必須チェックアウト: macOS版リポジトリ
 
-```
-git@github.com:universal-io/app-mac.git
+```bash
+# このリポジトリ
+git clone git@github.com:universal-io/app-ios.git
+
+# 必須。兄弟ディレクトリとして並べて置くこと
+git clone git@github.com:universal-io/app-mac.git
 ```
 
-**このリポジトリの兄弟ディレクトリとしてcloneすること。** 本リポジトリのドキュメントは
-`../app-mac/...` という相対パスで参照する。
+本リポジトリのドキュメントは `../app-mac/...` という相対パスで参照する。
+**並べて置かないと、参照がすべて切れる。**
 
 ```
 projects/universal-io/

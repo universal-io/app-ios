@@ -14,8 +14,9 @@
 
 ```bash
 cd /path/to/projects/universal-io
-git clone git@github.com:universal-io/app-mac.git
-# 結果: app-mac/ と app-ios/ が並ぶ
+git clone git@github.com:universal-io/app-ios.git   # このリポジトリ
+git clone git@github.com:universal-io/app-mac.git   # 参照先
+# 結果: app-ios/ と app-mac/ が並ぶ
 ```
 
 `app-mac` の中身:
