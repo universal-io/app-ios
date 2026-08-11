@@ -23,25 +23,29 @@ macOS版は**すでに公開・稼働している**（`v0.2.2`、2026-08-11公�
 持ち出すものである。** 作業はMac上に残したまま、解説とナビゲーションだけを手元の端末へ逃がす。
 Macの作業領域を1ピクセルも占有しないのが要点。
 
-### 必読・必須チェックアウト: macOS版リポジトリ
+### 必読の参照先: macOS版リポジトリ
+
+**[github.com/universal-io/app-mac](https://github.com/universal-io/app-mac)**
+
+本リポジトリのドキュメントは、macOS版のファイルを `../app-mac/...` という相対パスで参照する。
+
+- **すでに `../app-mac` がある環境なら、何もしなくてよい。** そのまま参照できる
+- **無い環境（別のマシンで作業する場合）は、隣に置く。** 置かないと相対パスが全部切れる
 
 ```bash
-# このリポジトリ
-git clone git@github.com:universal-io/app-ios.git
-
-# 必須。兄弟ディレクトリとして並べて置くこと
+cd /path/to/projects/universal-io
 git clone git@github.com:universal-io/app-mac.git
 ```
 
-本リポジトリのドキュメントは `../app-mac/...` という相対パスで参照する。
-**並べて置かないと、参照がすべて切れる。**
-
 ```
 projects/universal-io/
-├── app-mac/                     ← 必須。macOSクライアント + Gateway（サーバー）
+├── app-mac/                     ← macOSクライアント + Gateway（サーバー）
 ├── app-ios/                     ← このリポジトリ
 └── app-ios-legacy-bomb-squad/   ← 旧iOSアプリ（開発終了・参照不要）
 ```
+
+> **ブラウザで読んでいる場合**: 本書の `../app-mac/...` というリンクはGitHub上では解決しない。
+> 主要な参照先はURLを併記してあるので、そちらから開くこと。
 
 `app-mac` には2つのものが入っている。両方とも本アプリに直接関係する。
 
@@ -70,9 +74,9 @@ projects/universal-io/
 | 1 | **このREADME** | 全体像と、参照すべき場所 |
 | 2 | [**HANDOFF.md**](HANDOFF.md) | **既存資産の何を流用し、仕様のどこを修正するか。着手前に必読** |
 | 3 | [docs/poc-spec.md](docs/poc-spec.md) | オーナーが定義したPoC仕様（原文）。HANDOFF.mdに上書きされた箇所あり |
-| 4 | `../app-mac/README.md` | 現行プロダクトが何をどう実現しているか |
-| 5 | `../app-mac/docs/design-philosophy.md` | 北極星（ユーザー起点の世界モデル）と、作る順序の思想 |
-| 6 | `../app-mac/docs/api-contract.md` | Gatewayの契約 |
+| 4 | macOS版 README（[ローカル](../app-mac/README.md) / [GitHub](https://github.com/universal-io/app-mac/blob/main/README.md)） | 現行プロダクトが何をどう実現しているか |
+| 5 | design-philosophy（[ローカル](../app-mac/docs/design-philosophy.md) / [GitHub](https://github.com/universal-io/app-mac/blob/main/docs/design-philosophy.md)） | 北極星（ユーザー起点の世界モデル）と、作る順序の思想 |
+| 6 | api-contract（[ローカル](../app-mac/docs/api-contract.md) / [GitHub](https://github.com/universal-io/app-mac/blob/main/docs/api-contract.md)） | Gatewayの契約 |
 
 急ぐ場合でも **2 は飛ばさないこと。** 数か月かけて到達した結論と、その理由が書いてある。
 知らずに作ると、すでに一度捨てられた設計を作り直すことになる。

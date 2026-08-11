@@ -7,17 +7,14 @@
 本書が「**すでに存在するものは何か**」と「**PoC仕様のどこが既存の決定と衝突するか**」を扱う。
 目的は同じ発明を2度しないこと。
 
-## 前提: 参照リポジトリのチェックアウト
+## 前提: 参照先 app-mac
 
-本書は `../app-mac` を相対パスで参照する。**兄弟ディレクトリにcloneされていないと、
-本書の参照はすべて切れる。**
+本書は macOS版リポジトリ **[universal-io/app-mac](https://github.com/universal-io/app-mac)**
+を `../app-mac/...` という相対パスで参照する。
 
-```bash
-cd /path/to/projects/universal-io
-git clone git@github.com:universal-io/app-ios.git   # このリポジトリ
-git clone git@github.com:universal-io/app-mac.git   # 参照先
-# 結果: app-ios/ と app-mac/ が並ぶ
-```
+すでに隣に `app-mac` がある環境なら、そのまま読める。無い場合だけ隣にcloneすること
+（`git clone git@github.com:universal-io/app-mac.git`）。ブラウザで読んでいる場合、
+相対パスのリンクは解決しないのでGitHub上で辿ること。
 
 `app-mac` の中身:
 
