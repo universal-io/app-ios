@@ -53,12 +53,21 @@ targets:
         # Set here rather than in the Xcode UI so regenerating the project does
         # not silently drop it and fail the next device build.
         #
-        # Read the team from the certificate's OU, not from the name Xcode
-        # shows: the only Apple Development cert on this machine reads
-        # "Kaya Matsumoto (48P276DZDB)", but that suffix is a certificate id.
-        # The team is OU = TG68TFXG88, and using 48P276DZDB fails with
-        # "No signing certificate found". Same trap documented in
-        # ../../app-mac/project.yml.
+        # The team is the certificate's OU field. Read it from there, because
+        # the signing certificate carries three different identifiers and the
+        # most visible one is not the team:
+        #
+        #   UID = A5GLW24AVM
+        #   CN  = Apple Development: Kaya Matsumoto (48P276DZDB)
+        #   OU  = TG68TFXG88   <- the team, and the only one that belongs here
+        #
+        # Using the number printed in the name fails with a missing-certificate
+        # error that never mentions the team. Verify with:
+        #   security find-certificate -c "Apple Development: <name>" -p \
+        #     | openssl x509 -noout -subject
+        #
+        # ../../app-mac/project.yml documents the same trap but calls the name's
+        # suffix a "certificate id"; the UID above shows that is not what it is.
         DEVELOPMENT_TEAM: TG68TFXG88
         CODE_SIGN_STYLE: Automatic
       configs:
