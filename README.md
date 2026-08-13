@@ -132,6 +132,7 @@ open UniversalIOCopilot.xcodeproj
 
 | # | 読むもの | 何が分かるか |
 |---|---|---|
+| 0 | [**HANDOFF.md**](HANDOFF.md) | **いま何が動いていて次に何から触るか。セッションを引き継ぐならここから** |
 | 1 | **このREADME** | プロダクト定義と方針 |
 | 2 | [docs/architecture.md](docs/architecture.md) | システム設計・API契約・セキュリティ |
 | 3 | [docs/roadmap.md](docs/roadmap.md) | 実装順序とマイルストーン |

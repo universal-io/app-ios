@@ -28,9 +28,38 @@ cd ../server && npm run dev
 1. `Local.xcconfig` の `UIO_API_BASE_URL` を **Macのアドレス**にする。実機から見た
    `localhost` は実機自身であって、Macではない。`ipconfig getifaddr en0` で取得し、
    MacとiPhone/iPadを同じWi-Fiに置く
-2. Xcodeの Signing & Capabilities で自分のApple IDのTeamを選ぶ（無料アカウントで可）
+2. 署名Teamは `project.yml` に設定済み（`DEVELOPMENT_TEAM`）。Xcodeの画面で触る必要はない
 
-平文HTTPでMacに繋ぐのは `NSAllowsLocalNetworking` で許可済み。
+平文HTTPでMacに繋ぐのは `NSAllowsLocalNetworking`、LAN内への接続は
+`NSLocalNetworkUsageDescription` で許可済み。**後者が無いとiOSは許可を求めず、
+オフラインを装って失敗する**（一度これで詰まった）。
+
+### コマンドラインだけで実機へ流す
+
+Xcodeを開かずに、ビルド・インストール・起動まで通る。`-allowProvisioningUpdates`
+が無いとプロファイルの更新ができずに落ちる。
+
+```bash
+DEV=$(xcrun devicectl list devices | awk '/available/ {print $3; exit}')
+
+xcodebuild -project UniversalIOCopilot.xcodeproj -scheme UniversalIOCopilot \
+  -destination "id=$DEV" -derivedDataPath /tmp/uio-dd \
+  -allowProvisioningUpdates build
+
+xcrun devicectl device install app --device $DEV \
+  "/tmp/uio-dd/Build/Products/Debug-iphoneos/Copilot Dev.app"
+
+xcrun devicectl device process launch --device $DEV \
+  --terminate-existing com.universalio.copilot.dev
+```
+
+- 起動が `device was not, or could not be, unlocked` で失敗したら、iPhoneのロックを
+  解除する（インストールはロック中でも通る）
+- iOSの権限判断をリセットしたいときは
+  `xcrun devicectl device uninstall app --device $DEV com.universalio.copilot.dev`
+  してから入れ直す
+- サーバーは **`npm run dev` で起動する。`next start` はリクエストを記録しないので、
+  実機からの通信が届いているかを判定できない**（これで切り分けに失敗した）
 
 ## 設定値
 
