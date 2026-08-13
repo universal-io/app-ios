@@ -27,13 +27,24 @@ npm run dev
 
 ## モデル
 
-`claude-opus-5`。選択とフォールバックは `app/api/analyze/route.ts` の1箇所だけが決める。
-`fallbacks: "default"` を有効にしてあるので、安全性分類器が拒否した場合は
-Anthropic推奨のフォールバックモデルが同一呼び出し内で応答する。
+**OpenAI `gpt-5.6-luna`（Responses API）**。Vision対応で、速度と単価が現時点で最良。
+`../app-mac` のGatewayが本番で使っている一次モデルと同じで、呼び出しの形も
+そこで実証済みのものに合わせてある（`store: false`、`reasoning.effort: "none"`、
+`detail: "original"`、SSEの `response.output_text.delta`）。
 
-`effort` は `high` から始めている。**実画面で精度を測ってから下げる**こと
-（roadmap M1）。速い・安いを先に選ぶと、開いたプルダウンを読めないモデルを
-掴む — [../docs/lessons-from-app-mac.md](../docs/lessons-from-app-mac.md) §5。
+**モデルを知っているのは [lib/vision-model.ts](lib/vision-model.ts) だけ。**
+差し替えはこのファイル1つで完結し、`/api/analyze` の契約は動かない。
+
+- `store: false` は**チューニング対象ではない**。画面には第三者の情報が映り得るので、
+  保持しない約束は製品の一部
+- `reasoning.effort` は `"none"`。速度優先で選んだモデルなので既定はこれ。
+  **実画面で精度を測ってから**上げ下げすること（roadmap M1）。
+  速い・安いを先に選ぶと、開いたプルダウンを読めないモデルを掴む —
+  [../docs/lessons-from-app-mac.md](../docs/lessons-from-app-mac.md) §5
+- 画像は `detail: "original"`。縮小は数字の誤読を招く（同 §3）
+
+SDKではなく `fetch` を直接使っている。このモデルの機能（`detail: "original"` 等）を
+公開SDKの型が網羅している保証がなく、app-mac が同じ理由で同じ選択をしているため。
 
 ## コンテキストパック
 

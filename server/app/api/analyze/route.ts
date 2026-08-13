@@ -1,20 +1,13 @@
-import Anthropic from "@anthropic-ai/sdk";
-
 import { authenticate, checkRateLimit } from "@/lib/auth";
 import { loadContextPack } from "@/lib/context-packs";
 import { buildCandidateBlock, buildSystemPrompt, buildUserContent } from "@/lib/prompt";
-import {
-  ANALYZE_JSON_SCHEMA,
-  clampResult,
-  isAnalyzeResult,
-  type AnalyzeRequest,
-} from "@/lib/schema";
+import { clampResult, isAnalyzeResult, type AnalyzeRequest } from "@/lib/schema";
 import { SummaryFieldStream } from "@/lib/summary-stream";
+import { MODEL_ID, ProviderError, streamVision } from "@/lib/vision-model";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
-const MODEL = "claude-opus-5";
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_TURNS = 20;
 
@@ -41,42 +34,15 @@ export async function POST(request: Request): Promise<Response> {
   const pack = await loadContextPack(body.context_pack_id);
   const candidateBlock = buildCandidateBlock(body);
 
-  const content: Anthropic.Beta.BetaContentBlockParam[] = [
-    {
-      type: "image",
-      source: {
-        type: "base64",
-        media_type: mediaType(body),
-        data: body.image,
-      },
-    },
-    { type: "text", text: buildUserContent(body, candidateBlock !== null) },
-  ];
-  if (candidateBlock) content.push({ type: "text", text: candidateBlock });
-
-  const history = (body.turns ?? []).slice(-MAX_TURNS).map((turn) => ({
-    role: turn.role,
-    content: turn.text,
-  }));
-
-  const client = new Anthropic();
-
-  const params = {
-    model: MODEL,
-    max_tokens: 16000,
-    system: buildSystemPrompt(pack),
-    messages: [...history, { role: "user", content }],
-    output_config: {
-      // Guidance quality is what makes or breaks this product, so start high and
-      // sweep down against real screens rather than guessing (docs/roadmap.md M1).
-      effort: "high",
-      format: { type: "json_schema", schema: ANALYZE_JSON_SCHEMA },
-    },
-    // Claude Opus 5's safety classifiers can decline a request; without this a
-    // refusal just stops. "default" re-serves it on Anthropic's recommended
-    // fallback, routed by refusal category.
-    betas: ["server-side-fallback-2026-07-01"],
-    fallbacks: "default",
+  const input = {
+    systemText: buildSystemPrompt(pack),
+    userText: buildUserContent(body, candidateBlock !== null),
+    extraText: candidateBlock,
+    imageDataURL: `data:${mediaType(body)};base64,${body.image}`,
+    history: (body.turns ?? []).slice(-MAX_TURNS).map((turn) => ({
+      role: turn.role,
+      text: turn.text,
+    })),
   };
 
   const encoder = new TextEncoder();
@@ -88,65 +54,33 @@ export async function POST(request: Request): Promise<Response> {
           encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
         );
       };
+      const fail = (code: string, message: string) => {
+        send("error", { request_id: body.request_id, error: { code, message } });
+      };
 
       try {
-        // The SDK's published types trail the current API surface for
-        // `fallbacks` and `output_config.format`; the wire shape above is the
-        // contract we target.
-        const stream = client.beta.messages.stream(
-          params as unknown as Anthropic.Beta.MessageCreateParamsStreaming,
-        );
-
         const summary = new SummaryFieldStream("summary");
+        let raw = "";
 
-        for await (const event of stream) {
-          if (
-            event.type === "content_block_delta" &&
-            event.delta.type === "text_delta"
-          ) {
-            const text = summary.push(event.delta.text);
+        for await (const event of streamVision(input)) {
+          if (event.type === "delta") {
+            const text = summary.push(event.text);
             if (text) send("delta", { text });
+          } else {
+            raw = event.text;
           }
         }
-
-        const message = await stream.finalMessage();
-
-        if (message.stop_reason === "refusal") {
-          send("error", {
-            request_id: body.request_id,
-            error: {
-              code: "REFUSED",
-              message:
-                "The model declined to analyze this screen. Try a different screen or rephrase the question.",
-            },
-          });
-          controller.close();
-          return;
-        }
-
-        const raw = message.content
-          .filter((block): block is Anthropic.Beta.BetaTextBlock => block.type === "text")
-          .map((block) => block.text)
-          .join("");
 
         let parsed: unknown;
         try {
           parsed = JSON.parse(raw);
         } catch {
-          send("error", {
-            request_id: body.request_id,
-            error: { code: "INVALID_RESULT", message: "The model returned unparseable output." },
-          });
-          controller.close();
+          fail("INVALID_RESULT", `${MODEL_ID} returned unparseable output.`);
           return;
         }
 
         if (!isAnalyzeResult(parsed)) {
-          send("error", {
-            request_id: body.request_id,
-            error: { code: "INVALID_RESULT", message: "The model's output did not match the schema." },
-          });
-          controller.close();
+          fail("INVALID_RESULT", `${MODEL_ID}'s output did not match the schema.`);
           return;
         }
 
@@ -154,13 +88,14 @@ export async function POST(request: Request): Promise<Response> {
           request_id: body.request_id,
           ...clampResult(parsed),
           applied_context_pack: pack?.id ?? null,
-          meta: { model_fallback_used: usedFallback(message) },
+          meta: { model: MODEL_ID },
         });
       } catch (error) {
-        send("error", {
-          request_id: body.request_id,
-          error: { code: "PROVIDER_ERROR", message: describe(error) },
-        });
+        if (error instanceof ProviderError) {
+          fail(error.code, error.message);
+        } else {
+          fail("PROVIDER_ERROR", describe(error));
+        }
       } finally {
         controller.close();
       }
@@ -209,14 +144,8 @@ function mediaType(body: AnalyzeRequest): AllowedMediaType {
     : "image/jpeg";
 }
 
-function usedFallback(message: Anthropic.Beta.BetaMessage): boolean {
-  return message.content.some((block) => (block as { type: string }).type === "fallback");
-}
-
 function describe(error: unknown): string {
-  if (error instanceof Anthropic.APIError) return `${error.status ?? ""} ${error.message}`.trim();
-  if (error instanceof Error) return error.message;
-  return "Unknown error while contacting the model.";
+  return error instanceof Error ? error.message : "Unknown error while contacting the model.";
 }
 
 function errorResponse(status: number, code: string, message: string): Response {
