@@ -82,25 +82,17 @@ struct AnalyzeClient {
             throw try await decodeErrorBody(bytes, status: http.statusCode)
         }
 
-        var eventName = ""
-        var dataLines: [String] = []
         var sawResult = false
 
-        for try await line in bytes.lines {
-            if line.isEmpty {
-                if let event = try dispatch(eventName: eventName, data: dataLines.joined(separator: "\n")) {
-                    if case .result = event { sawResult = true }
-                    continuation.yield(event)
-                }
-                eventName = ""
-                dataLines.removeAll()
-                continue
-            }
-
-            if let value = line.dropPrefix("event:") {
-                eventName = value.trimmingCharacters(in: .whitespaces)
-            } else if let value = line.dropPrefix("data:") {
-                dataLines.append(value.hasPrefix(" ") ? String(value.dropFirst()) : value)
+        // Framed from raw bytes rather than `bytes.lines`, because that sequence
+        // discards blank lines — and in Server-Sent Events the blank line *is*
+        // the record separator. Reading it that way silently yielded no events
+        // at all: the stream simply ended, and the failure looked like a dropped
+        // connection rather than a parser that could never fire.
+        for try await block in bytes.serverSentEventBlocks {
+            if let event = try dispatch(block) {
+                if case .result = event { sawResult = true }
+                continuation.yield(event)
             }
         }
 
@@ -114,7 +106,22 @@ struct AnalyzeClient {
         }
     }
 
-    private func dispatch(eventName: String, data: String) throws -> Event? {
+    /// Turns one SSE record into an event. Unknown record types are ignored so a
+    /// server that adds one does not break an older client.
+    private func dispatch(_ block: String) throws -> Event? {
+        var eventName = ""
+        var dataLines: [String] = []
+
+        for line in block.split(separator: "\n", omittingEmptySubsequences: false) {
+            let text = String(line)
+            if let value = text.dropPrefix("event:") {
+                eventName = value.trimmingCharacters(in: .whitespaces)
+            } else if let value = text.dropPrefix("data:") {
+                dataLines.append(value.hasPrefix(" ") ? String(value.dropFirst()) : value)
+            }
+        }
+
+        let data = dataLines.joined(separator: "\n")
         guard !data.isEmpty else { return nil }
         let payload = Data(data.utf8)
 
@@ -218,5 +225,53 @@ struct AnalyzeClient {
 private extension String {
     func dropPrefix(_ prefix: String) -> String? {
         hasPrefix(prefix) ? String(dropFirst(prefix.count)) : nil
+    }
+}
+
+extension URLSession.AsyncBytes {
+    /// Splits the stream into Server-Sent Event records on the blank line that
+    /// terminates each one, keeping every line inside a record intact.
+    ///
+    /// Framed at the byte level on purpose: a newline byte cannot occur inside a
+    /// multi-byte UTF-8 character, so this is safe, and it does not inherit
+    /// `lines`' habit of throwing blank lines away.
+    var serverSentEventBlocks: AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream(String.self) { continuation in
+            let task = Task {
+                var buffer: [UInt8] = []
+                var newlineRun = 0
+
+                func flush() {
+                    guard !buffer.isEmpty else { return }
+                    continuation.yield(String(decoding: buffer, as: UTF8.self))
+                    buffer.removeAll(keepingCapacity: true)
+                }
+
+                do {
+                    for try await byte in self {
+                        if byte == 0x0D { continue } // carriage returns carry no meaning here
+                        guard byte == 0x0A else {
+                            newlineRun = 0
+                            buffer.append(byte)
+                            continue
+                        }
+                        newlineRun += 1
+                        if newlineRun >= 2 {
+                            if buffer.last == 0x0A { buffer.removeLast() }
+                            flush()
+                            newlineRun = 0
+                        } else {
+                            buffer.append(byte)
+                        }
+                    }
+                    // A final record that arrived without its blank line still counts.
+                    flush()
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 }
