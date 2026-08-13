@@ -1,3 +1,10 @@
+> **⚠️ アーカイブ（2026-08-13）**: 本書はapp-macの既存Gateway・既存クライアント資産の
+> 流用を前提としていたが、オーナー判断で**ゼロベース設計（専用APIサーバー新造・
+> App Store課金・カメラモード・コンテキストパック）**へ切り替えた。現行の正本は
+> [../../README.md](../../README.md) / [../architecture.md](../architecture.md) /
+> [../roadmap.md](../roadmap.md)。実測に基づく教訓は
+> [../lessons-from-app-mac.md](../lessons-from-app-mac.md) へ抽出済み。
+
 # 引き継ぎ — 何を作り直さないか
 
 作成: 2026-08-11（app-mac 開発セッションからの引き継ぎ）

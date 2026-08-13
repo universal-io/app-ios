@@ -1,0 +1,12 @@
+// Copy to Local.xcconfig (gitignored) and adjust. Read at build time into
+// Info.plist, then read at runtime by AppConfig.
+
+// The analysis server. Point at the local one while developing:
+//   cd ../server && npm run dev
+// Note that // starts a comment in xcconfig, so the scheme's slashes are
+// written through a variable to keep them out of the parser's way.
+SLASH = /
+UIO_API_BASE_URL = http:$(SLASH)$(SLASH)localhost:3000
+
+// Must match one of the values in the server's BETA_TOKENS.
+UIO_BETA_TOKEN = dev-local-token
