@@ -1,5 +1,6 @@
 import { authenticate, checkRateLimit } from "@/lib/auth";
 import { loadContextPack } from "@/lib/context-packs";
+import { imageSize } from "@/lib/image-size";
 import { buildCandidateBlock, buildSystemPrompt, buildUserContent } from "@/lib/prompt";
 import { clampResult, isAnalyzeResult, type AnalyzeRequest } from "@/lib/schema";
 import { SummaryFieldStream } from "@/lib/summary-stream";
@@ -31,12 +32,29 @@ export async function POST(request: Request): Promise<Response> {
   const invalid = validate(body);
   if (invalid) return errorResponse(400, "BAD_REQUEST", invalid);
 
+  // Derived from the bytes rather than trusted from the caller, because the
+  // model needs the exact size and getting it wrong fails silently.
+  let bytes: Uint8Array;
+  try {
+    bytes = Uint8Array.from(Buffer.from(body.image, "base64"));
+  } catch {
+    return errorResponse(400, "BAD_REQUEST", "image is not valid base64.");
+  }
+  const size = imageSize(bytes);
+  if (!size) {
+    return errorResponse(
+      400,
+      "BAD_REQUEST",
+      "The image dimensions could not be read. Send a PNG, JPEG, or WebP.",
+    );
+  }
+
   const pack = await loadContextPack(body.context_pack_id);
   const candidateBlock = buildCandidateBlock(body);
 
   const input = {
     systemText: buildSystemPrompt(pack),
-    userText: buildUserContent(body, candidateBlock !== null),
+    userText: buildUserContent(body, candidateBlock !== null, size),
     extraText: candidateBlock,
     imageDataURL: `data:${mediaType(body)};base64,${body.image}`,
     history: (body.turns ?? []).slice(-MAX_TURNS).map((turn) => ({

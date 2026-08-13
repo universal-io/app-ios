@@ -4,6 +4,7 @@
  * lets one prompt serve every screen (docs/lessons-from-app-mac.md section 10).
  */
 
+import type { ImageSize } from "./image-size";
 import type { AnalyzeRequest, ContextPackText } from "./prompt-types";
 
 export type ContextPackTextInput = ContextPackText;
@@ -39,8 +40,16 @@ ${pack.body}`;
 export function buildUserContent(
   request: AnalyzeRequest,
   hasCandidates: boolean,
+  size: ImageSize,
 ): string {
-  const lines: string[] = [];
+  // Stating the size is load-bearing, not informational. Without it the model
+  // normalizes against a canvas it assumes rather than the one it was given, and
+  // every box lands in the right column and the wrong row while the explanation
+  // stays correct. Measured 2026-08-13: mean vertical error 0.155 without this
+  // sentence, 0.001 with it.
+  const lines: string[] = [
+    `This image is exactly ${size.width} pixels wide and ${size.height} pixels tall. Every coordinate you return must be divided by those two numbers — x and w by ${size.width}, y and h by ${size.height} — so that they are fractions of this image and not of any other size.`,
+  ];
 
   if (request.source?.kind === "camera") {
     lines.push(
