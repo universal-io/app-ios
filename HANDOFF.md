@@ -26,19 +26,27 @@
 モデルは OpenAI `gpt-5.6-luna`（Responses API）。**モデルを知っているのは
 [server/lib/vision-model.ts](server/lib/vision-model.ts) 1ファイルだけ。**
 
-## 唯一の未解決課題（M4より先に切り分ける）
+## ハイライトのズレ: 原因はバグで、修正済み（実機での確認だけ残っている）
 
-**ハイライトが下方向に200〜300pxズレる。** 原因候補が2つあり、**対処が全く違う**。
+**チューニングではなく EXIF orientation のバグだった。** カメラJPEGは画素を撮像時の
+向きで格納し回転はEXIFで指示するため、**モデルは回転後を見るのにサーバーは格納時の
+寸法を伝えていた**。縦軸だけ誤った分母で割られ、写真も解説文も正しいまま枠だけが上へ
+ズレる。数値の一致まで確認した（[docs/roadmap.md](docs/roadmap.md) 実測2）。
 
-- **EXIF orientation の座標系不一致（＝バグ）** — サーバーとモデルはJPEG格納時の向きで
-  見て、アプリは `UIImage` の回転補正後サイズで描く
-- モデルの写真に対する誤差（＝チューニング） — 写真はベゼルや机を含む
+修正は2箇所。**iOSで向きを画素に焼き込む**（送るバイトと描画対象を同一画像にする）と、
+**サーバーでEXIFを読んで寸法を入れ替える**（他クライアント向けの防御）。
+合成画像では修正後 `x=0.828 / y=0.825` と正解に完全一致。
 
-**前者だとミラーモードでも同じ問題が出る**ので、M4に入る前に判別すべき。
-詳細と切り分け方は [docs/roadmap.md](docs/roadmap.md) 実測2。
+**残っているのは実機での確認だけ。** 修正版はビルド済みだがインストールが実機の
+スリープ待ちで未実施。次のセッションの最初にこれを済ませる:
 
-**画像の縮小はこの切り分けの後**（先に入れるとカメラ由来か縮小由来か区別できない。
-実寸4032×3024でもサーバーは3.4秒で応答しており速度上の問題は無い）。
+```bash
+cd server && npm run dev     # 別ターミナルで起動したまま
+# iPhoneのロックを解除してから ios/README.md の「コマンドラインだけで実機へ流す」
+```
+
+撮り直して**枠の中心が対象内に入る率 9/10 以上**を確認できたらM1完了。
+そのあと画像の縮小（コストと帯域のため。速度は問題になっていない）。
 
 ## 動かし方
 
@@ -63,6 +71,7 @@ cd server && npm run dev          # 必ず dev。start はリクエストを記�
 | 罠 | どこに書いてあるか |
 |---|---|
 | モデルに画像サイズを伝えないと**Y座標だけ**壊れる（解説文は正しいまま） | [server/lib/prompt.ts](server/lib/prompt.ts)、lessons §3-b |
+| 伝えた寸法が**格納時**だと、モデルは**回転後**を見ているので同じ壊れ方をする | [server/lib/image-size.ts](server/lib/image-size.ts)、lessons §3-c |
 | `URLSession.AsyncBytes.lines` は**空行を捨てる**。SSEの区切りは空行 | [ios/.../AnalyzeClient.swift](ios/UniversalIOCopilot/Services/AnalyzeClient.swift) |
 | 署名Teamは証明書の**OU**。名前に出ている番号ではない | [ios/project.yml](ios/project.yml) |
 | `NSLocalNetworkUsageDescription` が無いとiOSは**オフラインを装って**失敗する | [ios/project.yml](ios/project.yml) |
@@ -75,6 +84,8 @@ cd server && npm run dev          # 必ず dev。start はリクエストを記�
 （`next dev` ならログに出る）。
 
 ## M4 の進め方
+
+**着手前に上のズレの実機確認を済ませること**（原因は特定・修正済みなので、確認だけ）。
 
 [docs/roadmap.md](docs/roadmap.md) M4 に順序と合格ラインの枠を書いてある。要点だけ:
 

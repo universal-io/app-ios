@@ -55,8 +55,22 @@ final class AnalysisSession {
     }
 
     func analyze(imageData: Data, tapPoint: CGPoint?) {
-        guard let image = UIImage(data: imageData) else {
+        guard let captured = UIImage(data: imageData) else {
             phase = .failed("The captured photo could not be read.")
+            return
+        }
+
+        // A camera JPEG stores its pixels in the sensor's orientation and leaves a
+        // rotation flag for the viewer to apply. That splits the picture into two
+        // coordinate spaces: the bytes we upload, and the upright image we draw
+        // annotations on. Measured 2026-08-14 — the model reads the rotated image
+        // while the dimensions derived from the file describe the stored one, so
+        // it divides by the wrong axis and every box lands at the wrong height.
+        //
+        // Baking the rotation into the pixels here collapses the two spaces into
+        // one before anything depends on either.
+        guard let (image, uploadData) = upright(captured) else {
+            phase = .failed("The captured photo could not be prepared for analysis.")
             return
         }
 
@@ -68,7 +82,7 @@ final class AnalysisSession {
         phase = .analyzing
 
         let request = AnalyzeClient.Request(
-            image: imageData,
+            image: uploadData,
             question: question.isEmpty ? nil : question,
             tapPoint: tapPoint,
             turns: turns,
@@ -95,6 +109,24 @@ final class AnalysisSession {
                 }
             }
         }
+    }
+
+    /// Returns the image with its rotation flag applied to the pixels, together
+    /// with JPEG bytes of exactly that image — so what the model measures and
+    /// what the overlay draws on are the same picture.
+    private func upright(_ image: UIImage) -> (UIImage, Data)? {
+        let redrawn: UIImage
+        if image.imageOrientation == .up {
+            redrawn = image
+        } else {
+            let format = UIGraphicsImageRendererFormat.default()
+            format.scale = 1
+            redrawn = UIGraphicsImageRenderer(size: image.size, format: format).image { _ in
+                image.draw(in: CGRect(origin: .zero, size: image.size))
+            }
+        }
+        guard let data = redrawn.jpegData(compressionQuality: 0.9) else { return nil }
+        return (redrawn, data)
     }
 
     private func apply(_ value: AnalysisResult, askedQuestion: String) {

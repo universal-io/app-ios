@@ -25,11 +25,24 @@ function pngSize(b: Uint8Array): ImageSize | null {
   return { width: view.getUint32(16), height: view.getUint32(20) };
 }
 
+/**
+ * A JPEG's frame header describes the pixels as stored; an EXIF orientation tag
+ * can then ask the viewer to rotate them. Measured 2026-08-14: the model reads
+ * the rotated image, so the size that matters is the rotated one. Reporting the
+ * stored size for a rotated photo made it divide the vertical axis by the wrong
+ * number, which moved every box up the screen while the wording stayed right.
+ *
+ * Clients are expected to bake rotation into the pixels before uploading. This
+ * covers the ones that do not, so a future client cannot reintroduce a failure
+ * whose only symptom is a confident answer pointing at the wrong place.
+ */
 function jpegSize(b: Uint8Array): ImageSize | null {
   if (b.length < 4 || b[0] !== 0xff || b[1] !== 0xd8) return null;
 
   const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
   let offset = 2;
+  let stored: ImageSize | null = null;
+  let orientation = 1;
 
   while (offset + 9 < b.length) {
     if (b[offset] !== 0xff) {
@@ -43,13 +56,63 @@ function jpegSize(b: Uint8Array): ImageSize | null {
       offset += 2;
       continue;
     }
+
+    const length = view.getUint16(offset + 2);
+    if (length < 2) break;
+
+    if (marker === 0xe1) {
+      orientation = exifOrientation(view, b, offset + 4, length - 2) ?? orientation;
+    }
+
     // Start of frame, in any of its flavors except the two that are not frames.
     if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
-      return { height: view.getUint16(offset + 5), width: view.getUint16(offset + 7) };
+      stored = { height: view.getUint16(offset + 5), width: view.getUint16(offset + 7) };
+      // EXIF always precedes the frame header, so orientation is known by now.
+      break;
     }
-    const length = view.getUint16(offset + 2);
-    if (length < 2) return null;
     offset += 2 + length;
+  }
+
+  if (!stored) return null;
+  // 5 through 8 are the quarter-turns; they exchange the two axes.
+  return orientation >= 5 && orientation <= 8
+    ? { width: stored.height, height: stored.width }
+    : stored;
+}
+
+/** Reads tag 0x0112 out of IFD0. Returns null when the segment is not EXIF. */
+function exifOrientation(
+  view: DataView,
+  b: Uint8Array,
+  start: number,
+  length: number,
+): number | null {
+  const header = "Exif\0\0";
+  if (start + header.length > b.length) return null;
+  for (let i = 0; i < header.length; i += 1) {
+    if (b[start + i] !== header.charCodeAt(i)) return null;
+  }
+
+  const tiff = start + header.length;
+  if (tiff + 8 > b.length) return null;
+
+  const little = view.getUint16(tiff) === 0x4949;
+  const u16 = (at: number) => view.getUint16(at, little);
+  const u32 = (at: number) => view.getUint32(at, little);
+
+  if (u16(tiff + 2) !== 0x002a) return null;
+
+  const ifd = tiff + u32(tiff + 4);
+  if (ifd + 2 > b.length) return null;
+
+  const count = u16(ifd);
+  const end = Math.min(ifd + 2 + count * 12, start + length, b.length - 12);
+
+  for (let entry = ifd + 2; entry <= end; entry += 12) {
+    if (u16(entry) === 0x0112) {
+      const value = u16(entry + 8);
+      return value >= 1 && value <= 8 ? value : null;
+    }
   }
   return null;
 }
