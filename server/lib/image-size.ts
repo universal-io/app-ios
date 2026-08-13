@@ -11,8 +11,28 @@
 
 export type ImageSize = { width: number; height: number };
 
+/** What the file says, before and after any rotation flag — for diagnosis. */
+export type ImageFacts = {
+  size: ImageSize;
+  stored: ImageSize;
+  orientation: number | null;
+};
+
 export function imageSize(bytes: Uint8Array): ImageSize | null {
-  return pngSize(bytes) ?? jpegSize(bytes) ?? webpSize(bytes);
+  return imageFacts(bytes)?.size ?? null;
+}
+
+export function imageFacts(bytes: Uint8Array): ImageFacts | null {
+  const png = pngSize(bytes);
+  if (png) return { size: png, stored: png, orientation: null };
+
+  const jpeg = jpegFacts(bytes);
+  if (jpeg) return jpeg;
+
+  const webp = webpSize(bytes);
+  if (webp) return { size: webp, stored: webp, orientation: null };
+
+  return null;
 }
 
 function pngSize(b: Uint8Array): ImageSize | null {
@@ -36,13 +56,13 @@ function pngSize(b: Uint8Array): ImageSize | null {
  * covers the ones that do not, so a future client cannot reintroduce a failure
  * whose only symptom is a confident answer pointing at the wrong place.
  */
-function jpegSize(b: Uint8Array): ImageSize | null {
+function jpegFacts(b: Uint8Array): ImageFacts | null {
   if (b.length < 4 || b[0] !== 0xff || b[1] !== 0xd8) return null;
 
   const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
   let offset = 2;
   let stored: ImageSize | null = null;
-  let orientation = 1;
+  let orientation: number | null = null;
 
   while (offset + 9 < b.length) {
     if (b[offset] !== 0xff) {
@@ -75,9 +95,12 @@ function jpegSize(b: Uint8Array): ImageSize | null {
 
   if (!stored) return null;
   // 5 through 8 are the quarter-turns; they exchange the two axes.
-  return orientation >= 5 && orientation <= 8
-    ? { width: stored.height, height: stored.width }
-    : stored;
+  const rotated = orientation !== null && orientation >= 5 && orientation <= 8;
+  return {
+    size: rotated ? { width: stored.height, height: stored.width } : stored,
+    stored,
+    orientation,
+  };
 }
 
 /** Reads tag 0x0112 out of IFD0. Returns null when the segment is not EXIF. */

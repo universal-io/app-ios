@@ -1,6 +1,6 @@
 import { authenticate, checkRateLimit } from "@/lib/auth";
 import { loadContextPack } from "@/lib/context-packs";
-import { imageSize } from "@/lib/image-size";
+import { imageFacts } from "@/lib/image-size";
 import { buildCandidateBlock, buildSystemPrompt, buildUserContent } from "@/lib/prompt";
 import { clampResult, isAnalyzeResult, type AnalyzeRequest } from "@/lib/schema";
 import { SummaryFieldStream } from "@/lib/summary-stream";
@@ -40,14 +40,25 @@ export async function POST(request: Request): Promise<Response> {
   } catch {
     return errorResponse(400, "BAD_REQUEST", "image is not valid base64.");
   }
-  const size = imageSize(bytes);
-  if (!size) {
+  const facts = imageFacts(bytes);
+  if (!facts) {
     return errorResponse(
       400,
       "BAD_REQUEST",
       "The image dimensions could not be read. Send a PNG, JPEG, or WebP.",
     );
   }
+  const size = facts.size;
+
+  // Coordinate faults in this path do not raise; they produce a correct-sounding
+  // answer pointing somewhere else. Logging what arrived and where the model put
+  // the box is what makes the difference measurable from the outside.
+  console.log(
+    `[analyze] ${body.request_id} stored=${facts.stored.width}x${facts.stored.height}`
+      + ` exif_orientation=${facts.orientation ?? "none"}`
+      + ` reported=${size.width}x${size.height}`
+      + ` bytes=${bytes.length}`,
+  );
 
   const pack = await loadContextPack(body.context_pack_id);
   const candidateBlock = buildCandidateBlock(body);
@@ -102,9 +113,17 @@ export async function POST(request: Request): Promise<Response> {
           return;
         }
 
+        const result = clampResult(parsed);
+        console.log(
+          `[analyze] ${body.request_id} boxes=`
+            + (result.annotations
+                .map((a) => `${a.label}@${a.box.x.toFixed(3)},${a.box.y.toFixed(3)}`)
+                .join(" ") || "none"),
+        );
+
         send("result", {
           request_id: body.request_id,
-          ...clampResult(parsed),
+          ...result,
           applied_context_pack: pack?.id ?? null,
           meta: { model: MODEL_ID },
         });

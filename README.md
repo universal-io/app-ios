@@ -137,6 +137,7 @@ open UniversalIOCopilot.xcodeproj
 | 2 | [docs/architecture.md](docs/architecture.md) | システム設計・API契約・セキュリティ |
 | 3 | [docs/roadmap.md](docs/roadmap.md) | 実装順序とマイルストーン |
 | 4 | [docs/lessons-from-app-mac.md](docs/lessons-from-app-mac.md) | macOS版が実測で得た教訓のうち、本企画でも通用するもの |
+| 5 | [docs/investigation-highlight-offset.md](docs/investigation-highlight-offset.md) | **未解決の調査。ハイライトの位置がズレる原因の切り分け手順** |
 
 [docs/archive/](docs/archive/) には旧構想（app-mac資産の流用前提だった引き継ぎ書・PoC仕様）と、
 さらに前の旧iOSアプリの調査記録がある。**現行の設計はこのREADMEと上記docsが正**であり、
