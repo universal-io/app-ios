@@ -65,7 +65,15 @@ struct AnalyzeClient {
         urlRequest.timeoutInterval = 120
         urlRequest.httpBody = try encodeBody(request, requestID: requestID)
 
-        let (bytes, response) = try await session.bytes(for: urlRequest)
+        let bytes: URLSession.AsyncBytes
+        let response: URLResponse
+        do {
+            (bytes, response) = try await session.bytes(for: urlRequest)
+        } catch let error as URLError {
+            // URLSession's own wording sends people to check their Wi-Fi, which
+            // is rarely the problem when the server is a machine on the desk.
+            throw Failure(code: "UNREACHABLE", message: reachabilityMessage(for: error))
+        }
 
         guard let http = response as? HTTPURLResponse else {
             throw Failure(code: "BAD_RESPONSE", message: "The server sent an unreadable response.")
@@ -158,6 +166,35 @@ struct AnalyzeClient {
         }
 
         return try JSONSerialization.data(withJSONObject: body)
+    }
+
+    /// Says which address failed and what the plausible causes are, in the order
+    /// they are worth checking. `notConnectedToInternet` is the misleading one:
+    /// iOS reports it when it blocks a local-network connection, so a device with
+    /// working internet still lands here.
+    private func reachabilityMessage(for error: URLError) -> String {
+        let host = baseURL.absoluteString
+
+        switch error.code {
+        case .notConnectedToInternet:
+            return """
+            Could not reach \(host).
+            If the server is on your own network, allow this app under \
+            Settings › Privacy & Security › Local Network, and check that this \
+            device is on the same Wi-Fi as the server.
+            """
+        case .cannotConnectToHost, .cannotFindHost:
+            return """
+            Nothing answered at \(host).
+            Check that the server is running and that the address is right.
+            """
+        case .timedOut:
+            return "\(host) did not answer in time. The analysis may take a moment on a slow connection."
+        case .appTransportSecurityRequiresSecureConnection:
+            return "\(host) was refused because it is not HTTPS."
+        default:
+            return "Could not reach \(host). \(error.localizedDescription)"
+        }
     }
 
     private func decodeErrorBody(

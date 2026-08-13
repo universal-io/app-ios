@@ -35,7 +35,13 @@ targets:
         NSCameraUsageDescription:
           Camera mode photographs the screen in front of you so it can be explained.
           Photos are sent for analysis and are not stored.
-        # Lets the app reach a server running on the development machine.
+        # Required to reach a server on the same network — including a development
+        # one on your Mac. Without this key iOS does not prompt and does not
+        # explain: it fails the connection as if the device were offline.
+        NSLocalNetworkUsageDescription:
+          Screens are sent to the analysis server on your network. This is also how
+          the app reaches a development server running on your Mac.
+        # Permits plain HTTP to private addresses, which a local server uses.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         UIODefaultAPIBaseURL: $(UIO_API_BASE_URL)
