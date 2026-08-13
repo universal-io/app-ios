@@ -1,8 +1,12 @@
 // Copy to Local.xcconfig (gitignored) and adjust. Read at build time into
 // Info.plist, then read at runtime by AppConfig.
 
-// The analysis server. Point at the local one while developing:
-//   cd ../server && npm run dev
+// The analysis server. Start it with: cd ../server && npm run dev
+//
+// On a real device, localhost is the device itself, not the Mac — use the
+// Mac's address on the same Wi-Fi instead (`ipconfig getifaddr en0`), e.g.
+//   UIO_API_BASE_URL = http:$(SLASH)$(SLASH)192.168.11.26:3000
+//
 // Note that // starts a comment in xcconfig, so the scheme's slashes are
 // written through a variable to keep them out of the parser's way.
 SLASH = /

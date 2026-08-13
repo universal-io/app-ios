@@ -20,6 +20,18 @@ open UniversalIOCopilot.xcodeproj
 cd ../server && npm run dev
 ```
 
+## 実機で動かす（カメラモードはSimulator不可）
+
+**Simulatorにはカメラが無いので、M1の検証は実機でしか行えない。** 実機で動かすときは
+2点変える。
+
+1. `Local.xcconfig` の `UIO_API_BASE_URL` を **Macのアドレス**にする。実機から見た
+   `localhost` は実機自身であって、Macではない。`ipconfig getifaddr en0` で取得し、
+   MacとiPhone/iPadを同じWi-Fiに置く
+2. Xcodeの Signing & Capabilities で自分のApple IDのTeamを選ぶ（無料アカウントで可）
+
+平文HTTPでMacに繋ぐのは `NSAllowsLocalNetworking` で許可済み。
+
 ## 設定値
 
 `Local.xcconfig`（gitignore済み）の2つだけ。ビルド時にInfo.plistへ入り、
