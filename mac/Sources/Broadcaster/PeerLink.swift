@@ -81,7 +81,17 @@ final class PeerLink: NSObject {
 
     /// Sends `count` payloads of `size` bytes, paced at `fps`, and waits briefly
     /// for the last echoes before reporting.
+    ///
+    /// Offering a fixed rate regardless of whether the link is keeping up is the
+    /// point: the first run showed 15 ms at the median and 623 ms at p95 with
+    /// nothing lost, which is a queue filling rather than a link failing. Only
+    /// by pushing a rate and watching the spread does that become visible.
     func probe(count: Int, size: Int, fps: Int, reliable: Bool) async -> Reading {
+        lock.withLock {
+            reading = Reading()
+            sentAt.removeAll()
+        }
+
         let peers = session.connectedPeers
         guard !peers.isEmpty else { return lock.withLock { reading } }
 

@@ -38,22 +38,62 @@ if arguments.contains("--link") {
 
     do {
         let peer = try await link.waitForPeer(timeout: 60)
-        print("connected to \(peer.displayName). Sending \(count) payloads of \(size / 1024) KB at \(fps)/s, \(reliable ? "reliable" : "unreliable")…")
 
-        let reading = await link.probe(count: count, size: size, fps: fps, reliable: reliable)
-        let seconds = Double(count) / Double(fps)
+        // Frame rate is the knob the product actually has, so the sweep moves it
+        // and holds the payload at the size a real frame measured. What comes
+        // out is how many frames a second the link will carry before latency
+        // starts climbing — which is the number the mirror has to be built to.
+        let rates = arguments.contains("--sweep") ? [2, 5, 10, 15, 20, 30] : [fps]
+        print("connected to \(peer.displayName). Payload \(size / 1024) KB, \(reliable ? "reliable" : "unreliable").")
 
-        print("""
+        if rates.count > 1 {
+            print("\n  fps   offered      p50      p95      max    lost")
+            print("  ---   -------   ------   ------   ------   -----")
+        }
 
-        sent        \(reading.sent) payloads, \(reading.bytesSent / 1024) KB total
-        throughput  \(String(format: "%.2f", Double(reading.bytesSent) * 8 / seconds / 1_000_000)) Mbps offered
-        echoed      \(reading.echoed), \(reading.lost) lost (\(String(format: "%.1f", reading.lossPercent))%)
-        round trip  p50 \(String(format: "%.0f", reading.percentile(0.5) * 1000)) ms, \
-        p95 \(String(format: "%.0f", reading.percentile(0.95) * 1000)) ms, \
-        max \(String(format: "%.0f", reading.percentile(1.0) * 1000)) ms
-        one way     about \(String(format: "%.0f", reading.percentile(0.95) * 500)) ms at p95, \
-        taking half the round trip — an assumption, not a measurement
-        """)
+        for rate in rates {
+            let frames = rates.count > 1 ? rate * 5 : count
+            let reading = await link.probe(count: frames, size: size, fps: rate, reliable: reliable)
+            let seconds = Double(frames) / Double(rate)
+            let mbps = Double(reading.bytesSent) * 8 / seconds / 1_000_000
+
+            if rates.count > 1 {
+                print(String(
+                    format: "  %3d   %5.2f M   %5.0fms   %5.0fms   %5.0fms   %4.0f%%",
+                    rate, mbps,
+                    reading.percentile(0.5) * 1000,
+                    reading.percentile(0.95) * 1000,
+                    reading.percentile(1.0) * 1000,
+                    reading.lossPercent
+                ))
+            } else {
+                print("""
+
+                sent        \(reading.sent) payloads, \(reading.bytesSent / 1024) KB total
+                throughput  \(String(format: "%.2f", mbps)) Mbps offered
+                echoed      \(reading.echoed), \(reading.lost) lost (\(String(format: "%.1f", reading.lossPercent))%)
+                round trip  p50 \(String(format: "%.0f", reading.percentile(0.5) * 1000)) ms, \
+                p95 \(String(format: "%.0f", reading.percentile(0.95) * 1000)) ms, \
+                max \(String(format: "%.0f", reading.percentile(1.0) * 1000)) ms
+                one way     about \(String(format: "%.0f", reading.percentile(0.95) * 500)) ms at p95, \
+                taking half the round trip — an assumption, not a measurement
+                """)
+            }
+
+            // Let whatever queued during the last rate drain, or its backlog
+            // would be charged to the next one.
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+        }
+
+        if rates.count > 1 {
+            print("""
+
+            A median that stays low while p95 climbs is a queue filling, not a link
+            failing. Nothing was lost in the first run at 30/s, which means unreliable
+            delivery did not drop anything — so the broadcaster has to stop sending
+            rather than trust the transport to discard what it cannot carry.
+            """)
+        }
     } catch {
         print("link probe failed: \(error.localizedDescription)")
         exit(1)
