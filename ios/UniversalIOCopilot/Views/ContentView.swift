@@ -5,6 +5,7 @@ struct ContentView: View {
     @State private var session = AnalysisSession()
     @State private var pendingTap: CGPoint?
     @State private var showingProbe = false
+    @State private var showingMirror = false
 
     var body: some View {
         ZStack {
@@ -70,14 +71,19 @@ struct ContentView: View {
                     .foregroundStyle(.orange)
             }
 
-            // Measurement scaffolding for M4, not a feature. It goes away once
-            // the mirror itself exists.
-            Button("Mirror link probe") { showingProbe = true }
-                .font(.caption)
+            HStack(spacing: 16) {
+                Button("Mirror a Mac") { showingMirror = true }
+                // Measurement scaffolding for M4, kept because the link is
+                // worth re-measuring whenever the transport changes.
+                Button("Link probe") { showingProbe = true }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding()
         .background(.ultraThinMaterial)
         .sheet(isPresented: $showingProbe) { MirrorProbeView() }
+        .fullScreenCover(isPresented: $showingMirror) { MirrorView() }
     }
 
     // MARK: - Answer
