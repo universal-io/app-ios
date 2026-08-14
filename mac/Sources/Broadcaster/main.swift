@@ -88,9 +88,25 @@ if arguments.contains("--link") {
                 round trip  p50 \(String(format: "%.0f", reading.percentile(0.5) * 1000)) ms, \
                 p95 \(String(format: "%.0f", reading.percentile(0.95) * 1000)) ms, \
                 max \(String(format: "%.0f", reading.percentile(1.0) * 1000)) ms
+                stalls      \(reading.stalls) of \(reading.echoed) over \(Int(PeerLink.stallThreshold * 1000))ms
                 one way     about \(String(format: "%.0f", reading.percentile(0.95) * 500)) ms at p95, \
                 taking half the round trip — an assumption, not a measurement
                 """)
+
+                // Stalls cluster rather than spread, so where they fall matters
+                // as much as how many there are: a mirror can ride out a freeze
+                // by skipping to the present, but not if freezes never end.
+                if reading.timeline.count > 60, seconds >= 60 {
+                    print("\n            stalls per 30s: ", terminator: "")
+                    let buckets = Int(ceil(seconds / 30))
+                    for bucket in 0..<buckets {
+                        let window = reading.timeline.filter {
+                            $0.offset >= Double(bucket) * 30 && $0.offset < Double(bucket + 1) * 30
+                        }
+                        let stalled = window.filter { $0.roundTrip > PeerLink.stallThreshold }.count
+                        print("\(stalled)", terminator: bucket == buckets - 1 ? "\n" : " ")
+                    }
+                }
             }
 
             // Let whatever queued during the last rate drain, or its backlog

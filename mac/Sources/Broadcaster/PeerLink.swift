@@ -28,6 +28,10 @@ final class PeerLink: NSObject {
         var sent = 0
         var bytesSent = 0
         var roundTrips: [Double] = []
+        /// When each echo was sent, measured from the start of the run, paired
+        /// with how long it took. Stalls arrive in clusters rather than spread
+        /// out, and an average over the whole run hides that completely.
+        var timeline: [(offset: Double, roundTrip: Double)] = []
 
         var echoed: Int { roundTrips.count }
         var lost: Int { sent - echoed }
@@ -146,7 +150,14 @@ final class PeerLink: NSObject {
             var reading = Reading()
             reading.sent = count
             reading.bytesSent = bytesSent
-            reading.roundTrips = (firstSequence..<(firstSequence + UInt32(count))).compactMap { roundTrip[$0] }
+
+            let range = firstSequence..<(firstSequence + UInt32(count))
+            let runStart = sentAt[firstSequence] ?? Date()
+            for sequence in range {
+                guard let trip = roundTrip[sequence], let sent = sentAt[sequence] else { continue }
+                reading.roundTrips.append(trip)
+                reading.timeline.append((sent.timeIntervalSince(runStart), trip))
+            }
             return reading
         }
     }
@@ -173,7 +184,10 @@ extension PeerLink: MCSessionDelegate {
         let sequence = data.prefix(4).withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
 
         lock.withLock {
-            guard let sent = sentAt.removeValue(forKey: sequence) else { return }
+            // Kept rather than removed, so a run can place each reading on a
+            // timeline afterwards. Guarded against a duplicate echo counting
+            // twice, which removal used to prevent as a side effect.
+            guard let sent = sentAt[sequence], roundTrip[sequence] == nil else { return }
             roundTrip[sequence] = Date().timeIntervalSince(sent)
         }
     }
