@@ -8,7 +8,9 @@
 **macOS版とはほぼ別のプロダクト**であり、設計はゼロベースで行う。macOS版は参考資料
 （[docs/lessons-from-app-mac.md](docs/lessons-from-app-mac.md)）としてのみ扱う。
 
-**状態: 未着手。** このリポジトリにあるのは設計ドキュメントだけで、コードはまだ無い。
+**状態: カメラモードが実機で動いている。** 画面を読み、正しい次の一手を説明し、
+対象に枠を打つところまで iPhone 13 で確認済み。ミラーモード（Macコンパニオン）は未着手。
+いま何が動いていて次に何から触るかは [HANDOFF.md](HANDOFF.md)。
 
 ---
 
@@ -137,7 +139,7 @@ open UniversalIOCopilot.xcodeproj
 | 2 | [docs/architecture.md](docs/architecture.md) | システム設計・API契約・セキュリティ |
 | 3 | [docs/roadmap.md](docs/roadmap.md) | 実装順序とマイルストーン |
 | 4 | [docs/lessons-from-app-mac.md](docs/lessons-from-app-mac.md) | macOS版が実測で得た教訓のうち、本企画でも通用するもの |
-| 5 | [docs/investigation-highlight-offset.md](docs/investigation-highlight-offset.md) | **未解決の調査。ハイライトの位置がズレる原因の切り分け手順** |
+| 5 | [docs/investigation-highlight-offset.md](docs/investigation-highlight-offset.md) | ハイライトのズレを解決した記録。**推測で3回外した過程も残してある** |
 
 [docs/archive/](docs/archive/) には旧構想（app-mac資産の流用前提だった引き継ぎ書・PoC仕様）と、
 さらに前の旧iOSアプリの調査記録がある。**現行の設計はこのREADMEと上記docsが正**であり、

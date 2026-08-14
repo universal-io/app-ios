@@ -26,27 +26,29 @@
 モデルは OpenAI `gpt-5.6-luna`（Responses API）。**モデルを知っているのは
 [server/lib/vision-model.ts](server/lib/vision-model.ts) 1ファイルだけ。**
 
-## 🔴 次にやること: ハイライトのズレの調査（未解決）
+## ハイライトのズレ: 解決済み（2026-08-14、実機確認済み）
 
-**[docs/investigation-highlight-offset.md](docs/investigation-highlight-offset.md)
-を読んでから着手する。** 測定手順が定義してある。
+**原因は2つあり、どちらもアプリの座標変換ではなかった。** 経緯と外し方の記録は
+[docs/investigation-highlight-offset.md](docs/investigation-highlight-offset.md)。
 
-要点だけ:
+1. **送る画像が大きすぎた** — 実寸3024×4032で命中3/11。長辺1536に制限して18/18
+2. **座標をモデルに目測させていた** — OCRの実測矩形を `candidates` で渡すようにした
 
-- 枠が対象から200〜300pxズレる。**解説文は正しく、枠だけが違う**
-- **原因は未特定。** 症状から推測して2回修正し、2回外した（EXIF焼き込みは実機に
-  存在しない問題を直していた／レイアウト変更は無関係な箇所を壊した）
-- **空白は「実機写真に対してモデルの座標が正しいか一度も測っていない」こと。**
-  モデル側かアプリの描画側かが区別できていない
-- 文書に**独立した2つの測定**（A: サーバー側で枠を描いてモデル単体を見る／
-  B: アプリで決め打ち座標を描いて描画だけを見る）と判定表を定義済み。
-  **確定してから直す**
+決め手は**サーバーが受け取ったバイトに、返した座標で枠を描いて人間が見る**測定
+（`UIO_DEBUG_CAPTURE_DIR` + `server/scripts/draw-boxes.py`）。1枚で決着した。
 
-**この方針は第三者のエンジニアのレビュー待ち**（文書§13に論点あり）。
-レビュー結果次第で手順が変わる可能性がある。
+**同時に、Apple標準の回転実装（`AVCaptureDevice.RotationCoordinator`）が
+丸ごと欠けていたのを入れた。** 縦・横・逆さで正立する。横持ちは「難しいから後回し」
+ではなく、公式手順が未実装だっただけだった。
 
-横持ちは別問題として切り離してある（`videoOrientation` 未設定でプレビューが
-回転しない）。調査中は縦持ち固定を提案しているが、これもレビュー対象。
+### M1で残したもの（M4より優先ではない）
+
+- 文字のないアイコンボタンは接地できない（測る対象が無い）。モデルの目測に戻る
+- **枠が文字に吸い付き、文字が読みにくい。** 描画の調整で直る。座標の問題ではない
+- 横持ちでの座標は未検証（回転自体は正立する）
+- **タップで対象を指定する経路が未接続。** `ContentView` の `pendingTap` は
+  宣言されているが値が設定されず、常に nil のまま送られている。測定では
+  タップ座標があると精度が上がるので、入れる価値がある
 
 ## 動かし方
 
@@ -72,6 +74,9 @@ cd server && npm run dev          # 必ず dev。start はリクエストを記�
 |---|---|
 | モデルに画像サイズを伝えないと**Y座標だけ**壊れる（解説文は正しいまま） | [server/lib/prompt.ts](server/lib/prompt.ts)、lessons §3-b |
 | 伝えた寸法が**格納時**だと、モデルは**回転後**を見ているので同じ壊れ方をする | [server/lib/image-size.ts](server/lib/image-size.ts)、lessons §3-c |
+| **写真は実寸で送ると座標が壊れる。**「縮小すると読み違える」は逆だった | [ios/.../AnalysisSession.swift](ios/UniversalIOCopilot/ViewModels/AnalysisSession.swift)、lessons §3-d |
+| 誤差は**バイモーダル**。平均で見て定数補正すると当たっている回を壊す | investigation §4 |
+| ポート3000を**別プロジェクトのサーバー**が握っていると、HTMLが返って解析だけ失敗する | 下記 |
 | `URLSession.AsyncBytes.lines` は**空行を捨てる**。SSEの区切りは空行 | [ios/.../AnalyzeClient.swift](ios/UniversalIOCopilot/Services/AnalyzeClient.swift) |
 | 署名Teamは証明書の**OU**。名前に出ている番号ではない | [ios/project.yml](ios/project.yml) |
 | `NSLocalNetworkUsageDescription` が無いとiOSは**オフラインを装って**失敗する | [ios/project.yml](ios/project.yml) |
@@ -82,6 +87,17 @@ cd server && npm run dev          # 必ず dev。start はリクエストを記�
 **無関係な場所を疑わせるエラーを出す**。iOSとAppleの権限系は特にこの傾向が強いので、
 「繋がらない」系の症状では**まずサーバーログにリクエストが届いているかを見る**
 （`next dev` ならログに出る）。
+
+ポートの件も同じ形だった。別プロジェクトのNext.jsが3000を握っていて、
+`/api/analyze` にHTMLを返すため、アプリ側は解析だけが失敗する。回転の実装を
+疑わせる出方をした。**自分のサーバーかどうかは応答で判定できる**:
+
+```bash
+curl -s -m 5 http://localhost:3000/api/analyze -X POST \
+  -H "content-type: application/json" -d '{}'
+# 期待: {"error":{"code":"UNAUTHENTICATED", ...}}   HTMLが返ったら別人のサーバー
+lsof -nP -iTCP:3000 -sTCP:LISTEN -t | xargs -I{} lsof -a -p {} -d cwd -Fn | grep ^n
+```
 
 ## M4 の進め方
 
