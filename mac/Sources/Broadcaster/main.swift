@@ -23,6 +23,44 @@ let bitrateMbps = value(for: "--mbps", default: 8)
 let usePixels = arguments.contains("--pixels")
 let shouldEncode = arguments.contains("--encode")
 
+// The transport is measured on its own, with payloads the size of the frames
+// already measured rather than with the frames themselves — so a bad number
+// here cannot be blamed on capture or encoding.
+if arguments.contains("--link") {
+    let link = PeerLink()
+    let size = value(for: "--bytes", default: 30 * 1024)
+    let count = value(for: "--frames", default: 300)
+    let reliable = arguments.contains("--reliable")
+
+    print("""
+    advertising as "\(PeerLink.serviceType)". Open the app on the phone and start the mirror probe…
+    """)
+
+    do {
+        let peer = try await link.waitForPeer(timeout: 60)
+        print("connected to \(peer.displayName). Sending \(count) payloads of \(size / 1024) KB at \(fps)/s, \(reliable ? "reliable" : "unreliable")…")
+
+        let reading = await link.probe(count: count, size: size, fps: fps, reliable: reliable)
+        let seconds = Double(count) / Double(fps)
+
+        print("""
+
+        sent        \(reading.sent) payloads, \(reading.bytesSent / 1024) KB total
+        throughput  \(String(format: "%.2f", Double(reading.bytesSent) * 8 / seconds / 1_000_000)) Mbps offered
+        echoed      \(reading.echoed), \(reading.lost) lost (\(String(format: "%.1f", reading.lossPercent))%)
+        round trip  p50 \(String(format: "%.0f", reading.percentile(0.5) * 1000)) ms, \
+        p95 \(String(format: "%.0f", reading.percentile(0.95) * 1000)) ms, \
+        max \(String(format: "%.0f", reading.percentile(1.0) * 1000)) ms
+        one way     about \(String(format: "%.0f", reading.percentile(0.95) * 500)) ms at p95, \
+        taking half the round trip — an assumption, not a measurement
+        """)
+    } catch {
+        print("link probe failed: \(error.localizedDescription)")
+        exit(1)
+    }
+    exit(0)
+}
+
 let capture = ScreenCapture()
 var encoder: FrameEncoder?
 

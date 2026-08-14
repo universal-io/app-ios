@@ -41,6 +41,14 @@ targets:
         NSLocalNetworkUsageDescription:
           Screens are sent to the analysis server on your network. This is also how
           the app reaches a development server running on your Mac.
+        # MultipeerConnectivity refuses to browse for a service that is not
+        # declared here, and it does so silently: no prompt, no error, no peers
+        # ever found. Both entries are required — the framework advertises over
+        # TCP and UDP — and the name must match PeerLink.serviceType on both
+        # sides exactly.
+        NSBonjourServices:
+          - _uio-mirror._tcp
+          - _uio-mirror._udp
         # Permits plain HTTP to private addresses, which a local server uses.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true

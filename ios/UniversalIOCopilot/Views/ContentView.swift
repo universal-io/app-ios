@@ -4,6 +4,7 @@ struct ContentView: View {
     @State private var camera = CameraService()
     @State private var session = AnalysisSession()
     @State private var pendingTap: CGPoint?
+    @State private var showingProbe = false
 
     var body: some View {
         ZStack {
@@ -68,9 +69,15 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
+
+            // Measurement scaffolding for M4, not a feature. It goes away once
+            // the mirror itself exists.
+            Button("Mirror link probe") { showingProbe = true }
+                .font(.caption)
         }
         .padding()
         .background(.ultraThinMaterial)
+        .sheet(isPresented: $showingProbe) { MirrorProbeView() }
     }
 
     // MARK: - Answer
