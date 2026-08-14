@@ -22,3 +22,7 @@ node_modules/
 
 .env
 .env.local
+
+# Python bytecode from the diagnostic scripts in server/scripts.
+__pycache__/
+*.pyc

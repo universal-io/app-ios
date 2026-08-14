@@ -1,5 +1,6 @@
 import { authenticate, checkRateLimit } from "@/lib/auth";
 import { loadContextPack } from "@/lib/context-packs";
+import { debugCaptureEnabled, saveResult, saveUpload } from "@/lib/debug-capture";
 import { imageFacts } from "@/lib/image-size";
 import { buildCandidateBlock, buildSystemPrompt, buildUserContent } from "@/lib/prompt";
 import { clampResult, isAnalyzeResult, type AnalyzeRequest } from "@/lib/schema";
@@ -59,6 +60,8 @@ export async function POST(request: Request): Promise<Response> {
       + ` reported=${size.width}x${size.height}`
       + ` bytes=${bytes.length}`,
   );
+
+  if (debugCaptureEnabled) await saveUpload(body.request_id, bytes, mediaType(body));
 
   const pack = await loadContextPack(body.context_pack_id);
   const candidateBlock = buildCandidateBlock(body);
@@ -120,6 +123,15 @@ export async function POST(request: Request): Promise<Response> {
                 .map((a) => `${a.label}@${a.box.x.toFixed(3)},${a.box.y.toFixed(3)}`)
                 .join(" ") || "none"),
         );
+
+        if (debugCaptureEnabled) {
+          await saveResult(body.request_id, {
+            stored: facts.stored,
+            exif_orientation: facts.orientation,
+            reported_to_model: size,
+            annotations: result.annotations,
+          });
+        }
 
         send("result", {
           request_id: body.request_id,
