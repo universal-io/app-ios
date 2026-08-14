@@ -1,9 +1,15 @@
+import CoreMedia
 import Foundation
 
-// Answers one question: does ScreenCaptureKit hand over frames at the rate it
-// was asked for, and at the size analysis wants? Transport is not involved, so
-// a poor result here cannot be blamed on MultipeerConnectivity and a good one
+// Answers two questions, in the order they matter, with no transport involved —
+// so a poor reading cannot be blamed on MultipeerConnectivity and a good one
 // cannot be credited to it.
+//
+//   1. Does ScreenCaptureKit hand over frames at the rate and size asked for?
+//   2. What do those frames cost to carry once compressed?
+//
+// The second is the number the transport has to survive. Screen content is
+// mostly still, so it may turn out that mirroring is not a video problem at all.
 
 let arguments = CommandLine.arguments
 func value(for flag: String, default fallback: Int) -> Int {
@@ -13,15 +19,37 @@ func value(for flag: String, default fallback: Int) -> Int {
 
 let seconds = Double(value(for: "--seconds", default: 5))
 let fps = value(for: "--fps", default: 30)
+let bitrateMbps = value(for: "--mbps", default: 8)
 let usePixels = arguments.contains("--pixels")
+let shouldEncode = arguments.contains("--encode")
 
 let capture = ScreenCapture()
+var encoder: FrameEncoder?
 
 do {
     print("capturing for \(Int(seconds))s at up to \(fps) fps, \(usePixels ? "backing pixels" : "points")…")
-    let reading = try await capture.run(seconds: seconds, fps: fps, atPointScale: !usePixels)
+    if shouldEncode {
+        print("encoding H.264 with a \(bitrateMbps) Mbps ceiling. Scroll or type while this runs — a still screen flatters the result.")
+    }
 
+    // The encoder needs the frame size, which is only known once frames arrive.
+    if shouldEncode {
+        capture.onFrame = { pixelBuffer, time in
+            if encoder == nil {
+                encoder = try? FrameEncoder(
+                    width: CVPixelBufferGetWidth(pixelBuffer),
+                    height: CVPixelBufferGetHeight(pixelBuffer),
+                    fps: fps,
+                    bitrate: bitrateMbps * 1_000_000
+                )
+            }
+            encoder?.encode(pixelBuffer, at: time)
+        }
+    }
+
+    let reading = try await capture.run(seconds: seconds, fps: fps, atPointScale: !usePixels)
     let achieved = Double(reading.delivered) / seconds
+
     print("""
 
     display     \(Int(capture.displayPointSize.width))x\(Int(capture.displayPointSize.height)) points \
@@ -35,17 +63,28 @@ do {
     if let stopped = reading.stoppedWith {
         print("stopped early: \(stopped)")
     }
+
     if reading.delivered == 0 {
         print("""
 
         No frames arrived. This is almost always Screen Recording permission \
         rather than the code: macOS grants it to the program that runs this, so \
         check System Settings > Privacy & Security > Screen & System Audio \
-        Recording for whichever terminal launched it, and run it again after \
-        granting. The permission is only requested on a real attempt, so the \
-        first run is expected to fail.
+        Recording for whichever terminal launched it, restart that terminal, \
+        and run this again. The first attempt is expected to fail.
         """)
         exit(1)
+    }
+
+    if let encoded = encoder?.finish() {
+        let mbps = encoded.megabitsPerSecond(over: seconds)
+        print("""
+
+        encoded     \(encoded.frames) frames, \(encoded.keyframes) of them keyframes
+        bandwidth   \(String(format: "%.2f", mbps)) Mbps sustained
+        per frame   \(encoded.meanBytes / 1024) KB mean, \(encoded.largestFrame / 1024) KB largest
+        encode cost \(String(format: "%.2f", encoded.encodeSeconds / Double(max(encoded.frames, 1)) * 1000)) ms per frame
+        """)
     }
 } catch {
     print("capture failed: \(error.localizedDescription)")

@@ -1,3 +1,4 @@
+import AppKit
 import CoreMedia
 import Foundation
 import ScreenCaptureKit
@@ -23,6 +24,10 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     private var startedAt = Date()
     private var stream: SCStream?
 
+    /// Handed every complete frame, so the same capture can feed a measurement
+    /// of what the frames cost to send without capturing them twice.
+    var onFrame: ((CVPixelBuffer, CMTime) -> Void)?
+
     /// The display's size in points, which is the resolution analysis wants.
     /// Lessons section 3: Retina pixels cost tokens for nothing, and shrinking
     /// below points makes the model misread digits without saying so.
@@ -39,7 +44,18 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         }
 
         displayPointSize = CGSize(width: display.width, height: display.height)
-        displayPixelSize = CGSize(width: display.frame.width, height: display.frame.height)
+
+        // `SCDisplay.frame` is in points too, so deriving pixels from it reports
+        // the same number twice and makes a Retina display look like it has no
+        // backing scale. The scale has to come from NSScreen.
+        let scale = NSScreen.screens.first {
+            $0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+                == display.displayID
+        }?.backingScaleFactor ?? 1
+        displayPixelSize = CGSize(
+            width: displayPointSize.width * scale,
+            height: displayPointSize.height * scale
+        )
 
         let configuration = SCStreamConfiguration()
         // Asking for points rather than backing pixels is the whole of the
@@ -90,6 +106,7 @@ final class ScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
                 width: CVPixelBufferGetWidth(image),
                 height: CVPixelBufferGetHeight(image)
             )
+            onFrame?(image, CMSampleBufferGetPresentationTimeStamp(buffer))
         }
         reading.delivered += 1
     }
