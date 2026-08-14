@@ -25,6 +25,19 @@ struct AnalyzeClient {
         var turns: [Turn] = []
         var contextPackID: String?
         var sourceKind: String = "camera"
+        /// Rectangles measured on the image itself. The server tells the model to
+        /// copy the matching one rather than estimate, so anything in here beats
+        /// what the model would have drawn.
+        var candidates: [Candidate] = []
+    }
+
+    /// One measured element, in the image's normalized space with the origin at
+    /// the top left — the same space annotations come back in.
+    struct Candidate: Sendable {
+        var id: String
+        var role: String
+        var label: String
+        var box: CGRect
     }
 
     struct Turn: Codable, Sendable {
@@ -147,11 +160,28 @@ struct AnalyzeClient {
     }
 
     private func encodeBody(_ request: Request, requestID: String) throws -> Data {
+        var source: [String: Any] = ["kind": request.sourceKind]
+        if !request.candidates.isEmpty {
+            source["candidates"] = request.candidates.map { candidate in
+                [
+                    "id": candidate.id,
+                    "role": candidate.role,
+                    "label": candidate.label,
+                    "box": [
+                        "x": candidate.box.minX,
+                        "y": candidate.box.minY,
+                        "w": candidate.box.width,
+                        "h": candidate.box.height,
+                    ],
+                ]
+            }
+        }
+
         var body: [String: Any] = [
             "request_id": requestID,
             "image": request.image.base64EncodedString(),
             "image_media_type": request.mediaType,
-            "source": ["kind": request.sourceKind],
+            "source": source,
             "client": [
                 "platform": "ios",
                 "app_version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0",

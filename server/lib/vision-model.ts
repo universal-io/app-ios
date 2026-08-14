@@ -21,7 +21,17 @@ const MAX_OUTPUT_TOKENS = 25_000;
  */
 const REASONING_EFFORT = "none";
 
-/** Send the frame as captured; downscaling is what makes a model misread digits. */
+/**
+ * How the provider should treat the image it is handed.
+ *
+ * This was chosen on the assumption that downscaling is what makes a model
+ * misread digits, so frames should arrive untouched. Measured 2026-08-14, that
+ * assumption was backwards for coordinates: a 3024x4032 photo put 3 boxes of 11
+ * on target, the same photo at a third put 6 of 6, and the fine print read back
+ * correctly at every size tried. Callers now cap the long edge before sending
+ * (see AnalysisSession.maxAnalyzedEdge); this setting has not itself been
+ * measured, so it is left alone rather than changed on a hunch.
+ */
 const IMAGE_DETAIL = "original";
 
 export type VisionModelInput = {
