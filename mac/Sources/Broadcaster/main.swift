@@ -136,6 +136,63 @@ if arguments.contains("--link") {
     exit(0)
 }
 
+// The mirror itself: capture, compress, send. Every part of this was measured
+// on its own first, and the two rules below are the only things those
+// measurements said the design must do.
+if arguments.contains("--mirror") {
+    let link = PeerLink()
+    let capture = ScreenCapture()
+    var encoder: FrameEncoder?
+    var sent = 0
+    var droppedInFlight = 0
+    let startedAt = Date()
+
+    print("advertising as \"\(PeerLink.serviceType)\". Open the app on the phone and start the mirror…")
+
+    do {
+        let peer = try await link.waitForPeer(timeout: 120)
+        print("connected to \(peer.displayName). Mirroring at up to \(fps) fps, \(bitrateMbps) Mbps ceiling. Ctrl-C to stop.")
+
+        capture.onFrame = { pixelBuffer, time in
+            if encoder == nil {
+                encoder = try? FrameEncoder(
+                    width: CVPixelBufferGetWidth(pixelBuffer),
+                    height: CVPixelBufferGetHeight(pixelBuffer),
+                    fps: fps,
+                    bitrate: bitrateMbps * 1_000_000
+                )
+                encoder?.onEncoded = { frame, isKeyframe, parameterSets in
+                    let packet = FramePacket.encode(
+                        frame: frame,
+                        isKeyframe: isKeyframe,
+                        parameterSets: parameterSets,
+                        elapsedMilliseconds: UInt64(Date().timeIntervalSince(startedAt) * 1000)
+                    )
+                    if link.sendFrame(packet) { sent += 1 } else { droppedInFlight += 1 }
+                }
+            }
+            encoder?.submit(pixelBuffer, at: time)
+        }
+
+        // Runs until interrupted. Capture is measured the whole time so the
+        // numbers printed at the end describe the mirror rather than a bench.
+        let reading = try await capture.run(seconds: seconds, fps: fps, atPointScale: !usePixels)
+        let encoded = encoder?.finish()
+
+        print("""
+
+        captured    \(reading.delivered) frames with new content over \(Int(seconds))s
+        sent        \(sent) frames, \(droppedInFlight) dropped because the link was still busy
+        encoded     \(encoded?.frames ?? 0) frames, \(encoded.map { $0.meanBytes / 1024 } ?? 0) KB mean
+        link        \(link.hasPeer ? "peer still connected" : "peer gone")
+        """)
+    } catch {
+        print("mirror failed: \(error.localizedDescription)")
+        exit(1)
+    }
+    exit(0)
+}
+
 let capture = ScreenCapture()
 var encoder: FrameEncoder?
 

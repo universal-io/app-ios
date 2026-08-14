@@ -48,6 +48,14 @@ final class FrameEncoder {
     /// backlog build into latency.
     private static let maxInFlight = 2
 
+    /// Handed each compressed frame: the sample's own bytes, whether it stands
+    /// alone, and the parameter sets a decoder needs before it can read any of
+    /// it. The parameter sets ride with every keyframe rather than being sent
+    /// once at the start, so a viewer that joins late — or comes back after the
+    /// link stalls — can start decoding at the next keyframe instead of waiting
+    /// for a handshake that already happened.
+    var onEncoded: ((_ frame: Data, _ isKeyframe: Bool, _ parameterSets: [Data]) -> Void)?
+
     private let queue = DispatchQueue(label: "com.universalio.broadcaster.encode", qos: .userInitiated)
     private var session: VTCompressionSession?
     private let lock = NSLock()
@@ -129,6 +137,14 @@ final class FrameEncoder {
                 if status == noErr, let sample, let block = CMSampleBufferGetDataBuffer(sample) {
                     size = CMBlockBufferGetDataLength(block)
                     isKeyframe = Self.isKeyframe(sample)
+
+                    if let deliver = self.onEncoded, let bytes = Self.bytes(of: block) {
+                        deliver(
+                            bytes,
+                            isKeyframe,
+                            isKeyframe ? Self.parameterSets(of: sample) : []
+                        )
+                    }
                 }
 
                 self.lock.withLock {
@@ -153,6 +169,55 @@ final class FrameEncoder {
         }
         session = nil
         return lock.withLock { reading }
+    }
+
+    /// Copies the sample out of its block buffer. VideoToolbox hands back frames
+    /// in AVCC form — each NAL unit prefixed with its length — and the receiver
+    /// rebuilds a sample buffer from exactly these bytes, so nothing is
+    /// reinterpreted on the way.
+    private static func bytes(of block: CMBlockBuffer) -> Data? {
+        var length = 0
+        var pointer: UnsafeMutablePointer<Int8>?
+        guard CMBlockBufferGetDataPointer(
+            block,
+            atOffset: 0,
+            lengthAtOffsetOut: nil,
+            totalLengthOut: &length,
+            dataPointerOut: &pointer
+        ) == noErr, let pointer else { return nil }
+
+        return Data(bytes: pointer, count: length)
+    }
+
+    /// The sequence and picture parameter sets, which describe how to decode
+    /// everything that follows. Without them a decoder has bytes it cannot read.
+    private static func parameterSets(of sample: CMSampleBuffer) -> [Data] {
+        guard let format = CMSampleBufferGetFormatDescription(sample) else { return [] }
+
+        var count = 0
+        guard CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+            format,
+            parameterSetIndex: 0,
+            parameterSetPointerOut: nil,
+            parameterSetSizeOut: nil,
+            parameterSetCountOut: &count,
+            nalUnitHeaderLengthOut: nil
+        ) == noErr else { return [] }
+
+        return (0..<count).compactMap { index in
+            var pointer: UnsafePointer<UInt8>?
+            var size = 0
+            guard CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                format,
+                parameterSetIndex: index,
+                parameterSetPointerOut: &pointer,
+                parameterSetSizeOut: &size,
+                parameterSetCountOut: nil,
+                nalUnitHeaderLengthOut: nil
+            ) == noErr, let pointer else { return nil }
+
+            return Data(bytes: pointer, count: size)
+        }
     }
 
     private static func isKeyframe(_ sample: CMSampleBuffer) -> Bool {
