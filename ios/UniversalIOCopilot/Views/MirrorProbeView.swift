@@ -28,7 +28,9 @@ struct MirrorProbeView: View {
 
             case .searching:
                 ProgressView()
-                Text("Looking for a Mac advertising the mirror service…")
+                Text(probe.disconnections > 0
+                     ? "Lost the Mac and looking again — dropped \(probe.disconnections) time(s) so far."
+                     : "Looking for a Mac advertising the mirror service…")
                     .font(.callout)
                     .multilineTextAlignment(.center)
                 Text("""
@@ -46,6 +48,11 @@ struct MirrorProbeView: View {
                     .foregroundStyle(.green)
                 Text("\(probe.received) payloads, \(probe.bytes / 1024) KB echoed")
                     .font(.callout.monospacedDigit())
+                if probe.disconnections > 0 {
+                    Text("reconnected after \(probe.disconnections) drop(s)")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
                 Text("Read the result on the Mac.")
                     .font(.caption)
                     .foregroundStyle(.secondary)

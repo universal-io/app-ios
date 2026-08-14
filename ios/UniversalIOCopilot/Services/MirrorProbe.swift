@@ -22,6 +22,10 @@ final class MirrorProbe: NSObject {
     private(set) var state: State = .idle
     private(set) var received = 0
     private(set) var bytes = 0
+    /// Shown on screen because a run that goes quiet means something different
+    /// depending on whether the link dropped, and the phone is the only side
+    /// that can be watched while the Mac is busy sending.
+    private(set) var disconnections = 0
 
     private let peerID = MCPeerID(displayName: UIDevice.current.name)
     @ObservationIgnored private lazy var session = MCSession(
@@ -75,7 +79,10 @@ extension MirrorProbe: @preconcurrency MCSessionDelegate {
                 self.state = .connected(peerID.displayName)
                 self.browser.stopBrowsingForPeers()
             case .notConnected:
-                if case .connected = self.state { self.state = .searching }
+                if case .connected = self.state {
+                    self.disconnections += 1
+                    self.state = .searching
+                }
                 self.browser.startBrowsingForPeers()
             default:
                 break

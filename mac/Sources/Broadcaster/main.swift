@@ -89,6 +89,7 @@ if arguments.contains("--link") {
                 p95 \(String(format: "%.0f", reading.percentile(0.95) * 1000)) ms, \
                 max \(String(format: "%.0f", reading.percentile(1.0) * 1000)) ms
                 stalls      \(reading.stalls) of \(reading.echoed) over \(Int(PeerLink.stallThreshold * 1000))ms
+                link        \(reading.lostPeerAtSecond.map { String(format: "peer went away %.0fs in — the rest of this run had nobody to talk to", $0) } ?? "peer present for the whole run")\(reading.sendFailures > 0 ? ", \(reading.sendFailures) sends refused" : "")
                 one way     about \(String(format: "%.0f", reading.percentile(0.95) * 500)) ms at p95, \
                 taking half the round trip — an assumption, not a measurement
                 """)

@@ -33,6 +33,14 @@ final class PeerLink: NSObject {
         /// out, and an average over the whole run hides that completely.
         var timeline: [(offset: Double, roundTrip: Double)] = []
 
+        /// Sends the framework refused, which is not the same as a payload that
+        /// went out and never came back. Swallowing these reported a peer that
+        /// had left as 91% packet loss, and those two findings have opposite
+        /// consequences.
+        var sendFailures = 0
+        /// Seconds into the run when the session dropped, if it did.
+        var lostPeerAtSecond: Double?
+
         var echoed: Int { roundTrips.count }
         var lost: Int { sent - echoed }
         var lossPercent: Double { sent == 0 ? 0 : Double(lost) / Double(sent) * 100 }
@@ -79,8 +87,11 @@ final class PeerLink: NSObject {
     /// peer to ask is accepted, which is fine on a desk and is not fine as a
     /// product (anyone nearby can see the advertisement; architecture section 2).
     func waitForPeer(timeout: TimeInterval) async throws -> MCPeerID {
+        // Advertising stays on for the rest of the process. Stopping it once a
+        // peer joined meant a phone that dropped out could never find the Mac
+        // again, so a single disconnection ended the run while the sending loop
+        // carried on talking to nobody.
         advertiser.startAdvertisingPeer()
-        defer { advertiser.stopAdvertisingPeer() }
 
         return try await withThrowingTaskGroup(of: MCPeerID.self) { group in
             group.addTask {
@@ -107,10 +118,12 @@ final class PeerLink: NSObject {
     /// nothing lost, which is a queue filling rather than a link failing. Only
     /// by pushing a rate and watching the spread does that become visible.
     func probe(count: Int, size: Int, fps: Int, reliable: Bool) async -> Reading {
-        let peers = session.connectedPeers
-        guard !peers.isEmpty else { return Reading() }
+        guard !session.connectedPeers.isEmpty else { return Reading() }
 
         let firstSequence = lock.withLock { nextSequence }
+        let runStartedAt = Date()
+        var sendFailures = 0
+        var lostPeerAt: Double?
 
         // Random bytes rather than zeroes: a compressible payload would flatter
         // any transport that squeezes it on the way.
@@ -125,6 +138,17 @@ final class PeerLink: NSObject {
         var bytesSent = 0
 
         for offset in 0..<UInt32(count) {
+            // Read every time. Holding the list from before the loop meant a
+            // phone that left was still being sent to, and the framework's
+            // refusals were being discarded, so an empty room looked like a
+            // congested one.
+            let peers = session.connectedPeers
+            if peers.isEmpty {
+                if lostPeerAt == nil { lostPeerAt = Date().timeIntervalSince(runStartedAt) }
+                try? await Task.sleep(nanoseconds: interval)
+                continue
+            }
+
             let sequence = firstSequence + offset
             var payload = Data()
             withUnsafeBytes(of: sequence.bigEndian) { payload.append(contentsOf: $0) }
@@ -138,7 +162,12 @@ final class PeerLink: NSObject {
 
             // Stale video frames are meant to be dropped rather than queued, so
             // the measurement uses the same delivery mode the product will.
-            try? session.send(payload, toPeers: peers, with: reliable ? .reliable : .unreliable)
+            do {
+                try session.send(payload, toPeers: peers, with: reliable ? .reliable : .unreliable)
+            } catch {
+                sendFailures += 1
+                if lostPeerAt == nil { lostPeerAt = Date().timeIntervalSince(runStartedAt) }
+            }
             try? await Task.sleep(nanoseconds: interval)
         }
 
@@ -150,6 +179,8 @@ final class PeerLink: NSObject {
             var reading = Reading()
             reading.sent = count
             reading.bytesSent = bytesSent
+            reading.sendFailures = sendFailures
+            reading.lostPeerAtSecond = lostPeerAt
 
             let range = firstSequence..<(firstSequence + UInt32(count))
             let runStart = sentAt[firstSequence] ?? Date()
@@ -171,12 +202,33 @@ final class PeerLink: NSObject {
 
 extension PeerLink: MCSessionDelegate {
     func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
+        // Printed as it happens rather than summarized at the end. A run that
+        // ends with most payloads unaccounted for is a completely different
+        // finding depending on whether the peer was there at the time, and the
+        // timestamp is what tells them apart.
+        switch state {
+        case .notConnected:
+            print("  [\(Self.clock())] \(peerID.displayName) disconnected")
+        case .connecting:
+            print("  [\(Self.clock())] \(peerID.displayName) connecting")
+        case .connected:
+            print("  [\(Self.clock())] \(peerID.displayName) connected")
+        @unknown default:
+            break
+        }
+
         guard state == .connected else { return }
         let continuation = lock.withLock { () -> CheckedContinuation<MCPeerID, Error>? in
             defer { connected = nil }
             return connected
         }
         continuation?.resume(returning: peerID)
+    }
+
+    private static func clock() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter.string(from: Date())
     }
 
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
