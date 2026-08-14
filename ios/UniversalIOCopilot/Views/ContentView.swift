@@ -27,7 +27,9 @@ struct ContentView: View {
             ZStack {
                 switch camera.state {
                 case .running:
-                    CameraPreviewView(session: camera.session)
+                    CameraPreviewView(session: camera.session) { layer in
+                        camera.attachPreview(layer)
+                    }
                 case .denied:
                     message(
                         "Camera access is off",

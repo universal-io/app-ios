@@ -7,10 +7,16 @@ import UIKit
 struct CameraPreviewView: UIViewRepresentable {
     let session: AVCaptureSession
 
+    /// Called once the layer exists, so whoever owns the capture device can keep
+    /// it level. This view deliberately does not know how that is done — it only
+    /// makes the introduction.
+    let onPreviewLayer: (AVCaptureVideoPreviewLayer) -> Void
+
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
         view.videoPreviewLayer.session = session
         view.videoPreviewLayer.videoGravity = .resizeAspect
+        onPreviewLayer(view.videoPreviewLayer)
         return view
     }
 

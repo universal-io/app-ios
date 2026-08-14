@@ -24,6 +24,22 @@ final class CameraService: NSObject {
     private let photoOutput = AVCapturePhotoOutput()
     private var captureContinuation: CheckedContinuation<Data, Error>?
 
+    // Rotation is not ours to derive. Deducing an angle from the interface or
+    // device orientation is the classic way to get a preview that is upright and
+    // a photo that is not — the two need different angles, and the device
+    // orientation alone cannot tell them apart. iOS 17 answers this with
+    // `RotationCoordinator`, which watches the device against gravity and hands
+    // back one angle for each side. Apple's guidance is to apply what it returns
+    // rather than compute anything, so that is all this class does.
+    //
+    // Both angles have to be applied, to two different connections that are
+    // owned in two different places: the preview layer belongs to the SwiftUI
+    // view, the photo output belongs here. `attachPreview` is where they meet.
+    @ObservationIgnored private var device: AVCaptureDevice?
+    @ObservationIgnored private weak var previewLayer: AVCaptureVideoPreviewLayer?
+    @ObservationIgnored private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
+    @ObservationIgnored private var rotationObservers: [NSKeyValueObservation] = []
+
     struct CaptureError: LocalizedError {
         var message: String
         var errorDescription: String? { message }
@@ -53,6 +69,9 @@ final class CameraService: NSObject {
                 return
             }
         }
+        // Starts the capture side tracking gravity immediately. The preview side
+        // joins later, when the view hands its layer over.
+        trackRotation()
 
         await withCheckedContinuation { continuation in
             sessionQueue.async {
@@ -83,11 +102,70 @@ final class CameraService: NSObject {
             throw CaptureError(message: "No usable back camera on this device.")
         }
         session.addInput(input)
+        self.device = device
 
         guard session.canAddOutput(photoOutput) else {
             throw CaptureError(message: "The camera could not be prepared for capture.")
         }
         session.addOutput(photoOutput)
+    }
+
+    /// Takes ownership of the preview layer's rotation.
+    ///
+    /// The layer is built by the SwiftUI view but the angle that keeps it level
+    /// comes from the device, which lives here — so the view hands the layer over
+    /// and this class drives both sides from one coordinator. Safe to call again
+    /// with a new layer: the view is torn down whenever a photo is taken and
+    /// rebuilt on the next round.
+    func attachPreview(_ layer: AVCaptureVideoPreviewLayer) {
+        previewLayer = layer
+        trackRotation()
+    }
+
+    /// Rebuilds the coordinator for the current device and preview layer, and
+    /// keeps applying its angles for as long as they change.
+    private func trackRotation() {
+        rotationObservers.removeAll()
+
+        guard let device else {
+            rotationCoordinator = nil
+            return
+        }
+
+        let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)
+        rotationCoordinator = coordinator
+
+        // `.initial` applies the current angles now; the coordinator then reports
+        // every change, so the preview follows the device as it is turned instead
+        // of being correct only at launch. Apple delivers these on the main queue,
+        // but the hop is left explicit rather than assumed.
+        rotationObservers = [
+            coordinator.observe(\.videoRotationAngleForHorizonLevelPreview, options: [.initial, .new]) { [weak self] _, change in
+                guard let angle = change.newValue else { return }
+                Task { @MainActor in self?.apply(previewAngle: angle) }
+            },
+            coordinator.observe(\.videoRotationAngleForHorizonLevelCapture, options: [.initial, .new]) { [weak self] _, change in
+                guard let angle = change.newValue else { return }
+                Task { @MainActor in self?.apply(captureAngle: angle) }
+            },
+        ]
+    }
+
+    private func apply(previewAngle angle: CGFloat) {
+        guard let connection = previewLayer?.connection,
+              connection.isVideoRotationAngleSupported(angle)
+        else { return }
+        connection.videoRotationAngle = angle
+    }
+
+    /// On a photo output this is recorded as an EXIF orientation rather than by
+    /// turning the pixels, which is why `AnalysisSession` still has to bake that
+    /// flag in before the bytes are uploaded and drawn on.
+    private func apply(captureAngle angle: CGFloat) {
+        guard let connection = photoOutput.connection(with: .video),
+              connection.isVideoRotationAngleSupported(angle)
+        else { return }
+        connection.videoRotationAngle = angle
     }
 
     /// Returns JPEG data for one frame.
