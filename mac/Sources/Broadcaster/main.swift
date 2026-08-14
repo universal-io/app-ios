@@ -43,7 +43,7 @@ do {
                     bitrate: bitrateMbps * 1_000_000
                 )
             }
-            encoder?.encode(pixelBuffer, at: time)
+            encoder?.submit(pixelBuffer, at: time)
         }
     }
 
@@ -54,8 +54,10 @@ do {
 
     display     \(Int(capture.displayPointSize.width))x\(Int(capture.displayPointSize.height)) points \
     / \(Int(capture.displayPixelSize.width))x\(Int(capture.displayPixelSize.height)) pixels
-    frames      \(reading.delivered) complete, \(reading.incomplete) without new content
-    rate        \(String(format: "%.1f", achieved)) fps delivered of \(fps) requested
+    frames      \(reading.delivered) with new content, \(reading.incomplete) unchanged
+    samples     \(String(format: "%.1f", Double(reading.delivered + reading.incomplete) / seconds)) per second \
+    of \(fps) requested — this is the pipeline's rate, changed or not
+    changed     \(String(format: "%.1f", achieved)) fps actually carried new pixels
     frame size  \(Int(reading.pixelSize.width))x\(Int(reading.pixelSize.height))
     first frame \(reading.firstFrameDelay.map { String(format: "%.0f ms", $0 * 1000) } ?? "never arrived")
     """)
@@ -77,13 +79,14 @@ do {
     }
 
     if let encoded = encoder?.finish() {
-        let mbps = encoded.megabitsPerSecond(over: seconds)
         print("""
 
         encoded     \(encoded.frames) frames, \(encoded.keyframes) of them keyframes
-        bandwidth   \(String(format: "%.2f", mbps)) Mbps sustained
+        dropped     \(encoded.droppedBusy) of \(encoded.submitted) submitted, because the encoder was still busy
+        bandwidth   \(String(format: "%.2f", encoded.megabitsPerSecond(over: seconds))) Mbps sustained
         per frame   \(encoded.meanBytes / 1024) KB mean, \(encoded.largestFrame / 1024) KB largest
-        encode cost \(String(format: "%.2f", encoded.encodeSeconds / Double(max(encoded.frames, 1)) * 1000)) ms per frame
+        latency     \(String(format: "%.1f", encoded.meanLatencyMilliseconds)) ms from submit to compressed \
+        (queueing included — not a measure of work done)
         """)
     }
 } catch {

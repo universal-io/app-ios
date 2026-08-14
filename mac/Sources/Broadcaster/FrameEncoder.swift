@@ -9,26 +9,50 @@ import VideoToolbox
 /// compresses to almost nothing, while one being scrolled does not, and the
 /// difference decides whether the mirror is a video problem or a non-problem.
 ///
-/// Configured for live use rather than for the smallest file — no frame
-/// reordering, so nothing waits on a later frame to be decodable, which is
-/// latency the viewer would feel and never see a reason for.
+/// Encoding happens on its own queue. Doing it inline on the capture callback
+/// throttles capture itself, which first showed up as a frame rate that looked
+/// like a limit of ScreenCaptureKit and was actually this class standing in its
+/// way. It is also wrong for the product: the broadcaster must not be able to
+/// slow down the thing it is broadcasting.
+///
+/// Configured for live viewing rather than small files — no frame reordering,
+/// so nothing waits on a later frame to be decodable, which would be latency
+/// the viewer feels without ever seeing a cause.
 final class FrameEncoder {
     struct Reading {
+        var submitted = 0
+        /// Frames thrown away because the encoder was still busy. Dropping is
+        /// the correct real-time behavior (architecture section 2 says stale
+        /// frames go in the bin), but it has to be counted or the bandwidth
+        /// figure quietly describes a stream nobody would have watched.
+        var droppedBusy = 0
         var frames = 0
         var keyframes = 0
         var bytes = 0
         var largestFrame = 0
-        var encodeSeconds: Double = 0
+        /// Submit to compressed output, including time spent queued. This is a
+        /// latency, not a cost — the encoder is asynchronous, so wall time here
+        /// says nothing about how much work it did.
+        var latencySeconds: Double = 0
 
         var meanBytes: Int { frames == 0 ? 0 : bytes / frames }
+        var meanLatencyMilliseconds: Double {
+            frames == 0 ? 0 : latencySeconds / Double(frames) * 1000
+        }
         func megabitsPerSecond(over seconds: Double) -> Double {
             seconds <= 0 ? 0 : Double(bytes) * 8 / seconds / 1_000_000
         }
     }
 
+    /// Two frames in flight is enough to keep the encoder fed without letting a
+    /// backlog build into latency.
+    private static let maxInFlight = 2
+
+    private let queue = DispatchQueue(label: "com.universalio.broadcaster.encode", qos: .userInitiated)
     private var session: VTCompressionSession?
     private let lock = NSLock()
     private var reading = Reading()
+    private var inFlight = 0
 
     /// `bitrate` is a ceiling the encoder aims at, not a promise. Screen content
     /// usually lands far below it, which is the point of measuring.
@@ -72,37 +96,57 @@ final class FrameEncoder {
         session = created
     }
 
-    func encode(_ pixelBuffer: CVPixelBuffer, at time: CMTime) {
-        guard let session else { return }
-        let started = Date()
-
-        VTCompressionSessionEncodeFrame(
-            session,
-            imageBuffer: pixelBuffer,
-            presentationTimeStamp: time,
-            duration: .invalid,
-            frameProperties: nil,
-            infoFlagsOut: nil
-        ) { [weak self] status, _, sample in
-            guard let self, status == noErr, let sample, let block = CMSampleBufferGetDataBuffer(sample) else {
-                return
+    /// Returns immediately. The frame is encoded elsewhere, or dropped if the
+    /// encoder has not caught up.
+    func submit(_ pixelBuffer: CVPixelBuffer, at time: CMTime) {
+        let accepted: Bool = lock.withLock {
+            reading.submitted += 1
+            guard inFlight < Self.maxInFlight else {
+                reading.droppedBusy += 1
+                return false
             }
+            inFlight += 1
+            return true
+        }
+        guard accepted else { return }
 
-            let size = CMBlockBufferGetDataLength(block)
-            let isKeyframe = Self.isKeyframe(sample)
+        let submittedAt = Date()
+        queue.async { [weak self] in
+            guard let self, let session = self.session else { return }
 
-            self.lock.withLock {
-                self.reading.frames += 1
-                self.reading.bytes += size
-                self.reading.largestFrame = max(self.reading.largestFrame, size)
-                self.reading.encodeSeconds += Date().timeIntervalSince(started)
-                if isKeyframe { self.reading.keyframes += 1 }
+            VTCompressionSessionEncodeFrame(
+                session,
+                imageBuffer: pixelBuffer,
+                presentationTimeStamp: time,
+                duration: .invalid,
+                frameProperties: nil,
+                infoFlagsOut: nil
+            ) { [weak self] status, _, sample in
+                guard let self else { return }
+
+                var size = 0
+                var isKeyframe = false
+                if status == noErr, let sample, let block = CMSampleBufferGetDataBuffer(sample) {
+                    size = CMBlockBufferGetDataLength(block)
+                    isKeyframe = Self.isKeyframe(sample)
+                }
+
+                self.lock.withLock {
+                    self.inFlight -= 1
+                    guard size > 0 else { return }
+                    self.reading.frames += 1
+                    self.reading.bytes += size
+                    self.reading.largestFrame = max(self.reading.largestFrame, size)
+                    self.reading.latencySeconds += Date().timeIntervalSince(submittedAt)
+                    if isKeyframe { self.reading.keyframes += 1 }
+                }
             }
         }
     }
 
     /// Waits for frames still inside the encoder, so the totals are not short.
     func finish() -> Reading {
+        queue.sync {}
         if let session {
             VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
             VTCompressionSessionInvalidate(session)
