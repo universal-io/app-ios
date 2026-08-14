@@ -45,10 +45,16 @@ final class MirrorProbe: NSObject {
         received = 0
         bytes = 0
         state = .searching
+        // A sweep runs for minutes without anyone touching the phone. If the
+        // screen sleeps mid-run the app stops echoing and that rate reports
+        // total loss — which is indistinguishable in the results from a link
+        // that failed, and a previous sweep produced exactly that row.
+        UIApplication.shared.isIdleTimerDisabled = true
         browser.startBrowsingForPeers()
     }
 
     func stop() {
+        UIApplication.shared.isIdleTimerDisabled = false
         browser.stopBrowsingForPeers()
         session.disconnect()
         state = .idle

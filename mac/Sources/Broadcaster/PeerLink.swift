@@ -19,14 +19,25 @@ final class PeerLink: NSObject {
     /// refuses to browse without ever saying so.
     static let serviceType = "uio-mirror"
 
+    /// A stall is more honest than a percentile on a small sample: the link is
+    /// quick nearly always and occasionally stops, and counting the stops
+    /// survives a short run where p95 is one unlucky payload.
+    static let stallThreshold: TimeInterval = 0.2
+
     struct Reading {
         var sent = 0
-        var echoed = 0
         var bytesSent = 0
         var roundTrips: [Double] = []
 
+        var echoed: Int { roundTrips.count }
         var lost: Int { sent - echoed }
         var lossPercent: Double { sent == 0 ? 0 : Double(lost) / Double(sent) * 100 }
+        var stalls: Int { roundTrips.filter { $0 > PeerLink.stallThreshold }.count }
+
+        /// True when nothing came back at all, which is a broken run rather than
+        /// a lossy one and has to be reported differently — a previous sweep
+        /// printed "100% lost, 0 ms" and it read like data.
+        var isSilent: Bool { sent > 0 && roundTrips.isEmpty }
 
         func percentile(_ fraction: Double) -> Double {
             guard !roundTrips.isEmpty else { return 0 }
@@ -45,8 +56,13 @@ final class PeerLink: NSObject {
     )
 
     private let lock = NSLock()
-    private var reading = Reading()
+    // Sequence numbers never restart and timings are never discarded between
+    // runs. Clearing them was charging one rate for echoes that were still in
+    // flight when the next rate started, which is how a sweep produced a row
+    // that lost everything and a set of rows that got faster under more load.
+    private var nextSequence: UInt32 = 0
     private var sentAt: [UInt32: Date] = [:]
+    private var roundTrip: [UInt32: Double] = [:]
     private var connected: CheckedContinuation<MCPeerID, Error>?
 
     override init() {
@@ -87,13 +103,10 @@ final class PeerLink: NSObject {
     /// nothing lost, which is a queue filling rather than a link failing. Only
     /// by pushing a rate and watching the spread does that become visible.
     func probe(count: Int, size: Int, fps: Int, reliable: Bool) async -> Reading {
-        lock.withLock {
-            reading = Reading()
-            sentAt.removeAll()
-        }
-
         let peers = session.connectedPeers
-        guard !peers.isEmpty else { return lock.withLock { reading } }
+        guard !peers.isEmpty else { return Reading() }
+
+        let firstSequence = lock.withLock { nextSequence }
 
         // Random bytes rather than zeroes: a compressible payload would flatter
         // any transport that squeezes it on the way.
@@ -105,16 +118,19 @@ final class PeerLink: NSObject {
 
         let interval = UInt64(1_000_000_000 / max(fps, 1))
 
-        for sequence in 0..<UInt32(count) {
+        var bytesSent = 0
+
+        for offset in 0..<UInt32(count) {
+            let sequence = firstSequence + offset
             var payload = Data()
             withUnsafeBytes(of: sequence.bigEndian) { payload.append(contentsOf: $0) }
             payload.append(filler)
 
             lock.withLock {
                 sentAt[sequence] = Date()
-                reading.sent += 1
-                reading.bytesSent += payload.count
+                nextSequence = sequence + 1
             }
+            bytesSent += payload.count
 
             // Stale video frames are meant to be dropped rather than queued, so
             // the measurement uses the same delivery mode the product will.
@@ -122,8 +138,17 @@ final class PeerLink: NSObject {
             try? await Task.sleep(nanoseconds: interval)
         }
 
-        try? await Task.sleep(nanoseconds: 1_000_000_000)
-        return lock.withLock { reading }
+        // Long enough to outlast the worst stall seen so far, so a late echo is
+        // counted rather than recorded as loss.
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+
+        return lock.withLock {
+            var reading = Reading()
+            reading.sent = count
+            reading.bytesSent = bytesSent
+            reading.roundTrips = (firstSequence..<(firstSequence + UInt32(count))).compactMap { roundTrip[$0] }
+            return reading
+        }
     }
 
     struct Failure: LocalizedError {
@@ -149,8 +174,7 @@ extension PeerLink: MCSessionDelegate {
 
         lock.withLock {
             guard let sent = sentAt.removeValue(forKey: sequence) else { return }
-            reading.echoed += 1
-            reading.roundTrips.append(Date().timeIntervalSince(sent))
+            roundTrip[sequence] = Date().timeIntervalSince(sent)
         }
     }
 

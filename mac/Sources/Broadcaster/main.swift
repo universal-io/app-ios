@@ -43,29 +43,42 @@ if arguments.contains("--link") {
         // and holds the payload at the size a real frame measured. What comes
         // out is how many frames a second the link will carry before latency
         // starts climbing — which is the number the mirror has to be built to.
-        let rates = arguments.contains("--sweep") ? [2, 5, 10, 15, 20, 30] : [fps]
+        // Two passes over the same rates, and no rate so low that a percentile
+        // is one unlucky payload. The previous sweep read as though load made
+        // the link faster, which is not a thing that happens — it was noise with
+        // too few samples to argue with.
+        let sweeping = arguments.contains("--sweep")
+        let rates = sweeping ? [10, 15, 20, 30, 10, 15, 20, 30] : [fps]
         print("connected to \(peer.displayName). Payload \(size / 1024) KB, \(reliable ? "reliable" : "unreliable").")
 
-        if rates.count > 1 {
-            print("\n  fps   offered      p50      p95      max    lost")
-            print("  ---   -------   ------   ------   ------   -----")
+        if sweeping {
+            print("\n  pass   fps   offered      p50      p95      max    lost   stalls")
+            print("  ----   ---   -------   ------   ------   ------   -----   ------")
         }
 
-        for rate in rates {
-            let frames = rates.count > 1 ? rate * 5 : count
+        for (index, rate) in rates.enumerated() {
+            let frames = sweeping ? rate * 10 : count
             let reading = await link.probe(count: frames, size: size, fps: rate, reliable: reliable)
             let seconds = Double(frames) / Double(rate)
             let mbps = Double(reading.bytesSent) * 8 / seconds / 1_000_000
 
-            if rates.count > 1 {
-                print(String(
-                    format: "  %3d   %5.2f M   %5.0fms   %5.0fms   %5.0fms   %4.0f%%",
-                    rate, mbps,
-                    reading.percentile(0.5) * 1000,
-                    reading.percentile(0.95) * 1000,
-                    reading.percentile(1.0) * 1000,
-                    reading.lossPercent
-                ))
+            if sweeping {
+                if reading.isSilent {
+                    print(String(
+                        format: "  %4d   %3d   %5.2f M   nothing came back — run is broken, not lossy",
+                        index / 4 + 1, rate, mbps
+                    ))
+                } else {
+                    print(String(
+                        format: "  %4d   %3d   %5.2f M   %5.0fms   %5.0fms   %5.0fms   %4.0f%%   %3d/%d",
+                        index / 4 + 1, rate, mbps,
+                        reading.percentile(0.5) * 1000,
+                        reading.percentile(0.95) * 1000,
+                        reading.percentile(1.0) * 1000,
+                        reading.lossPercent,
+                        reading.stalls, reading.echoed
+                    ))
+                }
             } else {
                 print("""
 
@@ -85,13 +98,18 @@ if arguments.contains("--link") {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
 
-        if rates.count > 1 {
+        if sweeping {
             print("""
 
-            A median that stays low while p95 climbs is a queue filling, not a link
-            failing. Nothing was lost in the first run at 30/s, which means unreliable
-            delivery did not drop anything — so the broadcaster has to stop sending
-            rather than trust the transport to discard what it cannot carry.
+            Read the two passes against each other. A rate that is slow in both is a
+            limit; one that is slow in only one is the link stalling, which it does
+            regardless of load. "Stalls" counts payloads over \(Int(PeerLink.stallThreshold * 1000))ms and survives a
+            short run better than p95 does.
+
+            Nothing was lost at any rate in the first sweep even in unreliable mode, so
+            the broadcaster has to stop sending of its own accord — the transport will
+            queue what it cannot carry rather than discard it, and a mirror built to
+            trust it runs further behind the longer it is watched.
             """)
         }
     } catch {
