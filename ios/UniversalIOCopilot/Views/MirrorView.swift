@@ -62,6 +62,11 @@ struct MirrorView: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.orange)
             }
+            if receiver.gapsRecovered > 0 {
+                Text("\(receiver.gapsRecovered) gaps")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.orange)
+            }
             if receiver.disconnections > 0 {
                 Text("\(receiver.disconnections) drops")
                     .font(.caption.monospacedDigit())

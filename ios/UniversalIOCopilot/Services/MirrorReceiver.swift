@@ -17,12 +17,21 @@ final class MirrorDecoder: @unchecked Sendable {
     struct Outcome {
         var shown = false
         var size: CGSize = .zero
+        /// The sequence to acknowledge, so the sender can free a slot.
+        var acknowledge: UInt32?
+        /// Set when a frame went missing. Decoding onward from a gap does not
+        /// fail — it produces a picture that is quietly, increasingly wrong —
+        /// so the only way out is a keyframe, and waiting for the scheduled one
+        /// means up to two seconds of that.
+        var needsKeyframe = false
     }
 
     private let renderer: AVSampleBufferVideoRenderer
     private let lock = NSLock()
     private var format: CMVideoFormatDescription?
     private var newestFrameMilliseconds: UInt64 = 0
+    private var expectedSequence: UInt32?
+    private var awaitingKeyframe = false
 
     init(renderer: AVSampleBufferVideoRenderer) {
         self.renderer = renderer
@@ -34,18 +43,33 @@ final class MirrorDecoder: @unchecked Sendable {
         lock.withLock {
             format = nil
             newestFrameMilliseconds = 0
+            expectedSequence = nil
+            awaitingKeyframe = false
         }
         renderer.flush()
     }
 
     func present(_ packet: Data) -> Outcome {
-        guard let frame = FramePacket.decode(packet) else { return Outcome() }
+        guard let frame = FramePacket.decodeFrame(packet) else { return Outcome() }
+
+        var outcome = Outcome()
+        outcome.acknowledge = frame.sequence
 
         let prepared: (CMSampleBuffer, CGSize)? = lock.withLock {
             // A frame older than one already shown got here behind a stall.
             // Showing it would rewind the picture, and the point of a mirror is
             // to be current, so it goes in the bin.
             guard frame.elapsedMilliseconds >= newestFrameMilliseconds else { return nil }
+
+            // A gap means some frame this one is built on never arrived. The
+            // decoder will not object; it will just draw the difference onto a
+            // picture that is already wrong, and keep doing so. Hold the last
+            // good image until a keyframe arrives instead.
+            if let expected = expectedSequence, frame.sequence != expected, !frame.isKeyframe {
+                awaitingKeyframe = true
+                outcome.needsKeyframe = true
+            }
+            expectedSequence = frame.sequence &+ 1
 
             if !frame.parameterSets.isEmpty {
                 format = Self.makeFormat(frame.parameterSets) ?? format
@@ -56,7 +80,13 @@ final class MirrorDecoder: @unchecked Sendable {
             // flushed, and the first frame afterwards has to stand alone.
             if renderer.requiresFlushToResumeDecoding {
                 renderer.flush()
+                awaitingKeyframe = true
+                outcome.needsKeyframe = true
+            }
+
+            if awaitingKeyframe {
                 guard frame.isKeyframe else { return nil }
+                awaitingKeyframe = false
             }
 
             guard let sample = Self.makeSample(frame.data, format: format) else { return nil }
@@ -66,9 +96,11 @@ final class MirrorDecoder: @unchecked Sendable {
             return (sample, CGSize(width: Int(dimensions.width), height: Int(dimensions.height)))
         }
 
-        guard let prepared else { return Outcome() }
+        guard let prepared else { return outcome }
         renderer.enqueue(prepared.0)
-        return Outcome(shown: true, size: prepared.1)
+        outcome.shown = true
+        outcome.size = prepared.1
+        return outcome
     }
 
     /// Builds the description of how to read everything that follows, out of the
@@ -190,6 +222,7 @@ final class MirrorReceiver: NSObject {
     private(set) var framesShown = 0
     private(set) var framesSkipped = 0
     private(set) var disconnections = 0
+    private(set) var gapsRecovered = 0
     private(set) var frameSize: CGSize = .zero
 
     /// Owned here, not by the view: frames arrive from the network whether or
@@ -221,6 +254,7 @@ final class MirrorReceiver: NSObject {
         framesShown = 0
         framesSkipped = 0
         disconnections = 0
+        gapsRecovered = 0
         state = .searching
         // Mirroring is watched, not touched. Without this the screen dims part
         // way through and the link dies for a reason nobody would guess.
@@ -259,6 +293,17 @@ extension MirrorReceiver: @preconcurrency MCSessionDelegate {
 
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         let outcome = decoder.present(data)
+
+        // Replies go out reliably and are a handful of bytes. Losing one costs
+        // the sender a slot until the next acknowledgement, and losing a
+        // keyframe request costs up to two seconds of wrong picture.
+        if let sequence = outcome.acknowledge {
+            try? session.send(FramePacket.encodeAck(sequence: sequence), toPeers: [peerID], with: .reliable)
+        }
+        if outcome.needsKeyframe {
+            try? session.send(FramePacket.encodeKeyframeRequest(), toPeers: [peerID], with: .reliable)
+        }
+
         Task { @MainActor in
             if outcome.shown {
                 self.framesShown += 1
@@ -266,6 +311,7 @@ extension MirrorReceiver: @preconcurrency MCSessionDelegate {
             } else {
                 self.framesSkipped += 1
             }
+            if outcome.needsKeyframe { self.gapsRecovered += 1 }
         }
     }
 

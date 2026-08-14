@@ -76,7 +76,8 @@ final class PeerLink: NSObject {
     private var sentAt: [UInt32: Date] = [:]
     private var roundTrip: [UInt32: Double] = [:]
     private var connected: CheckedContinuation<MCPeerID, Error>?
-    private var sending = false
+    private var unacknowledged: Set<UInt32> = []
+    private var keyframeRequested = false
 
     override init() {
         super.init()
@@ -194,34 +195,56 @@ final class PeerLink: NSObject {
         }
     }
 
-    /// Sends a frame, unless the last one has not gone out yet.
+    /// How many frames may be out without the phone having said it got them.
     ///
-    /// Measured 2026-08-15: unreliable delivery dropped nothing at any rate, so
-    /// the transport queues whatever it cannot carry and latency grows without
-    /// bound — 15 ms at the median and 623 ms at p95 in the same run, with no
-    /// loss to show for it. Refusing to hand it more is the only thing that
-    /// keeps a mirror current, and dropping a frame nobody would have seen in
-    /// time costs nothing.
+    /// This is what backpressure actually needs. The first attempt guarded on
+    /// "is a send in progress", which was no guard at all: `MCSession.send`
+    /// queues and returns in microseconds, so the flag was never up when the
+    /// next frame arrived and every frame went out regardless. The transport
+    /// then queued what it could not carry — measured 2026-08-15, that is how
+    /// latency reaches 623 ms at p95 while losing nothing — and the picture
+    /// stuttered. Counting unacknowledged frames measures the far end instead
+    /// of the near one.
+    private static let maxUnacknowledged = 3
+
+    /// Sends a frame, or declines to.
+    ///
+    /// Keyframes go reliably and are never held back. They are the only points
+    /// a decoder can recover from, they are the largest packets, and unreliable
+    /// delivery discards the largest first — so the one packet whose loss
+    /// cannot heal was the one most likely to be lost. Everything else is
+    /// disposable and goes unreliably: a frame that arrives late is worth less
+    /// than the one behind it.
     ///
     /// Returns false when the frame was dropped, so the caller can count it.
     @discardableResult
-    func sendFrame(_ packet: Data) -> Bool {
+    func sendFrame(_ packet: Data, sequence: UInt32, isKeyframe: Bool) -> Bool {
         let peers = session.connectedPeers
         guard !peers.isEmpty else { return false }
 
         let accepted = lock.withLock { () -> Bool in
-            guard !sending else { return false }
-            sending = true
-            return true
+            if isKeyframe { return true }
+            return unacknowledged.count < Self.maxUnacknowledged
         }
         guard accepted else { return false }
 
-        defer { lock.withLock { sending = false } }
+        lock.withLock { _ = unacknowledged.insert(sequence) }
+
         do {
-            try session.send(packet, toPeers: peers, with: .unreliable)
+            try session.send(packet, toPeers: peers, with: isKeyframe ? .reliable : .unreliable)
             return true
         } catch {
+            lock.withLock { _ = unacknowledged.remove(sequence) }
             return false
+        }
+    }
+
+    /// True once, when the phone has asked for a fresh keyframe because it saw
+    /// a gap. Reading it clears it.
+    func takeKeyframeRequest() -> Bool {
+        lock.withLock {
+            defer { keyframeRequested = false }
+            return keyframeRequested
         }
     }
 
@@ -266,6 +289,21 @@ extension PeerLink: MCSessionDelegate {
     }
 
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
+        // The mirror's own replies: an acknowledgement frees a slot, and a
+        // keyframe request means the phone saw a gap and cannot recover on its
+        // own before the next scheduled keyframe, which may be two seconds away.
+        if let control = FramePacket.decodeControl(data) {
+            lock.withLock {
+                switch control.kind {
+                case .ack: unacknowledged.remove(control.sequence)
+                case .keyframeRequest: keyframeRequested = true
+                case .frame: break
+                }
+            }
+            return
+        }
+
+        // The link probe's echo, which is just the sequence number back.
         guard data.count >= 4 else { return }
         let sequence = data.prefix(4).withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
 

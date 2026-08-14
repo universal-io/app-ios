@@ -61,6 +61,16 @@ final class FrameEncoder {
     private let lock = NSLock()
     private var reading = Reading()
     private var inFlight = 0
+    private var forceKeyframe = false
+
+    /// Makes the next frame a keyframe.
+    ///
+    /// Called when the viewer reports a gap. Keyframes are otherwise two
+    /// seconds apart, and two seconds is a long time to look at a picture that
+    /// is quietly decoding against a reference it never received.
+    func requestKeyframe() {
+        lock.withLock { forceKeyframe = true }
+    }
 
     /// `bitrate` is a ceiling the encoder aims at, not a promise. Screen content
     /// usually lands far below it, which is the point of measuring.
@@ -122,12 +132,20 @@ final class FrameEncoder {
         queue.async { [weak self] in
             guard let self, let session = self.session else { return }
 
+            let wantsKeyframe = self.lock.withLock { () -> Bool in
+                defer { self.forceKeyframe = false }
+                return self.forceKeyframe
+            }
+            let properties: CFDictionary? = wantsKeyframe
+                ? [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue] as CFDictionary
+                : nil
+
             VTCompressionSessionEncodeFrame(
                 session,
                 imageBuffer: pixelBuffer,
                 presentationTimeStamp: time,
                 duration: .invalid,
-                frameProperties: nil,
+                frameProperties: properties,
                 infoFlagsOut: nil
             ) { [weak self] status, _, sample in
                 guard let self else { return }
