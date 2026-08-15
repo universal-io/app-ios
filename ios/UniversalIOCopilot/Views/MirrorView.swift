@@ -10,14 +10,30 @@ import SwiftUI
 /// landscape (roadmap M1, "レイアウトの方針").
 struct MirrorView: View {
     @State private var receiver = MirrorReceiver()
+    @State private var session = AnalysisSession()
+    @State private var explainedSize: CGSize = .zero
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            MirrorSurface(layer: receiver.displayLayer)
-                .ignoresSafeArea()
+            GeometryReader { proxy in
+                ZStack {
+                    MirrorSurface(layer: receiver.displayLayer)
+
+                    // Drawn against the frame that was explained, not the one on
+                    // screen now. The picture keeps moving while the answer is
+                    // being written, and a highlight that follows it would drift
+                    // off whatever it was pointing at.
+                    if let result = session.result, explainedSize != .zero {
+                        AnnotationOverlay(annotations: result.annotations, imageSize: explainedSize)
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { point in explain(tappedAt: point, in: proxy.size) }
+            }
+            .ignoresSafeArea()
 
             if case .connected = receiver.state {} else {
                 waitingPanel
@@ -26,10 +42,63 @@ struct MirrorView: View {
             VStack {
                 statusBar
                 Spacer()
+                if session.phase != .framing { answerPanel }
             }
         }
-        .task { receiver.start() }
+        .task {
+            session.sourceKind = "mirror"
+            receiver.start()
+        }
         .onDisappear { receiver.stop() }
+    }
+
+    /// Explains whatever is on screen, about the place that was touched.
+    ///
+    /// The whole analysis path is the one camera mode already proved — same
+    /// server, same normalized coordinates, same overlay — so mirroring only
+    /// had to supply a different picture.
+    private func explain(tappedAt point: CGPoint, in viewSize: CGSize) {
+        guard let frame = receiver.currentFrame() else { return }
+
+        let geometry = OverlayGeometry(imageSize: frame.size, viewSize: viewSize)
+        explainedSize = frame.size
+        session.reset()
+        session.analyze(imageData: frame.jpeg, tapPoint: geometry.normalizedPoint(fromViewPoint: point))
+    }
+
+    private var answerPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if case .failed(let reason) = session.phase {
+                Label(reason, systemImage: "exclamationmark.triangle")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+            } else if session.isBusy && session.streamingText.isEmpty {
+                HStack(spacing: 8) {
+                    ProgressView().tint(.white)
+                    Text("Reading the screen…").font(.callout)
+                }
+            } else {
+                ScrollView {
+                    Text(session.streamingText)
+                        .font(.callout)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 180)
+            }
+
+            HStack {
+                Text("Tap the screen to ask again")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Clear") { session.reset() }
+                    .font(.caption)
+            }
+        }
+        .padding()
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .padding(12)
+        .foregroundStyle(.white)
     }
 
     private var statusBar: some View {

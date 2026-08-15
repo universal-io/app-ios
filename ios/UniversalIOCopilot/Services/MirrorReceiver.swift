@@ -269,6 +269,27 @@ final class MirrorReceiver: NSObject {
         decoder.reset()
         state = .idle
     }
+
+    /// The frame currently on screen, as JPEG bytes for analysis.
+    ///
+    /// Taken from the renderer rather than decoded a second time, so what gets
+    /// explained is exactly what the person was looking at when they tapped.
+    /// Returns nil before the first frame arrives, and on iOS 17.0 to 17.3
+    /// where the renderer cannot hand its picture back.
+    func currentFrame() -> (jpeg: Data, size: CGSize)? {
+        guard #available(iOS 17.4, *) else { return nil }
+        guard let pixels = displayLayer.sampleBufferRenderer.displayedPixelBuffer() else { return nil }
+
+        let image = CIImage(cvPixelBuffer: pixels)
+        guard let rendered = Self.ciContext.createCGImage(image, from: image.extent) else { return nil }
+
+        let picture = UIImage(cgImage: rendered)
+        guard let jpeg = picture.jpegData(compressionQuality: 0.9) else { return nil }
+        return (jpeg, picture.size)
+    }
+
+    /// Built once. Creating a context per frame is the expensive way to do this.
+    @ObservationIgnored private static let ciContext = CIContext()
 }
 
 extension MirrorReceiver: @preconcurrency MCSessionDelegate {

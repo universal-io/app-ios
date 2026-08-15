@@ -205,7 +205,7 @@ final class PeerLink: NSObject {
     /// latency reaches 623 ms at p95 while losing nothing — and the picture
     /// stuttered. Counting unacknowledged frames measures the far end instead
     /// of the near one.
-    private static let maxUnacknowledged = 3
+    var unacknowledgedLimit = 3
 
     /// Sends a frame, or declines to.
     ///
@@ -224,7 +224,7 @@ final class PeerLink: NSObject {
 
         let accepted = lock.withLock { () -> Bool in
             if isKeyframe { return true }
-            return unacknowledged.count < Self.maxUnacknowledged
+            return unacknowledged.count < unacknowledgedLimit
         }
         guard accepted else { return false }
 

@@ -25,6 +25,12 @@ final class AnalysisSession {
     var contextPackID: String?
 
     private var turns: [AnalyzeClient.Turn] = []
+
+    /// Which pipeline the image came from. The prompt tells the model to read
+    /// through glare and skew for a camera photograph, which is wrong advice
+    /// for a screen capture arriving over the wire — it is already flat, sharp
+    /// and complete.
+    var sourceKind: String = "camera"
     private var task: Task<Void, Never>?
     private let client: AnalyzeClient
 
@@ -95,6 +101,7 @@ final class AnalysisSession {
                 tapPoint: tapPoint,
                 turns: turns,
                 contextPackID: contextPackID,
+                sourceKind: sourceKind,
                 candidates: await TextGrounding.candidates(in: uploadData)
             )
             if Task.isCancelled { return }

@@ -143,12 +143,13 @@ if arguments.contains("--mirror") {
     let link = PeerLink()
     let capture = ScreenCapture()
     var encoder: FrameEncoder?
-    var sent = 0
-    var droppedInFlight = 0
-    var keyframesSent = 0
-    var keyframesRequested = 0
     var frameSequence: UInt32 = 0
     let startedAt = Date()
+    let stats = MirrorStats()
+    // How many frames may be outstanding before disposable ones are dropped.
+    // Exposed because the right number is not obvious: too small starves the
+    // picture, too large is the queueing the measurements warned about.
+    link.unacknowledgedLimit = value(for: "--inflight", default: 3)
 
     print("advertising as \"\(PeerLink.serviceType)\". Open the app on the phone and start the mirror…")
 
@@ -174,20 +175,22 @@ if arguments.contains("--mirror") {
                         elapsedMilliseconds: UInt64(Date().timeIntervalSince(startedAt) * 1000)
                     )
                     if link.sendFrame(packet, sequence: frameSequence, isKeyframe: isKeyframe) {
-                        sent += 1
-                        if isKeyframe { keyframesSent += 1 }
+                        stats.frameSent(isKeyframe: isKeyframe)
                     } else {
-                        droppedInFlight += 1
+                        stats.frameHeldBack()
                     }
                 }
             }
+
+            stats.captureArrived()
+            stats.tick()
 
             // The viewer asks when it notices a gap. Answering costs one frame;
             // ignoring it leaves the picture decoding against something it never
             // received until the next scheduled keyframe two seconds later.
             if link.takeKeyframeRequest() {
                 encoder?.requestKeyframe()
-                keyframesRequested += 1
+                stats.keyframeRequested()
             }
             encoder?.submit(pixelBuffer, at: time)
         }
@@ -200,8 +203,8 @@ if arguments.contains("--mirror") {
         print("""
 
         captured    \(reading.delivered) frames with new content over \(Int(seconds))s
-        sent        \(sent) frames, \(droppedInFlight) held back because the phone had not caught up
-        keyframes   \(keyframesSent) sent, \(keyframesRequested) of them asked for after a gap
+        sent        \(stats.summary.sent) frames, \(stats.summary.heldBack) held back because the phone had not caught up
+        keyframes   \(stats.summary.keyframes) sent, \(stats.summary.requests) of them asked for after a gap
         encoded     \(encoded?.frames ?? 0) frames, \(encoded.map { $0.meanBytes / 1024 } ?? 0) KB mean
         link        \(link.hasPeer ? "peer still connected" : "peer gone")
         """)
