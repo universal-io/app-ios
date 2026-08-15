@@ -36,8 +36,12 @@
   #stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 24px; margin-top: 8px; }
   .stat { display: flex; justify-content: space-between; border-bottom: 1px solid #222; padding: 6px 0; }
   .stat b { font-variant-numeric: tabular-nums; font-weight: 600; }
-  #status { margin-top: 14px; color: #f0a; min-height: 1.5em; }
-  video { display: none; }
+  #status { margin-top: 14px; color: #f87171; min-height: 1.5em; white-space: pre-wrap; }
+  #sent { margin-top: 6px; color: #4ade80; font-variant-numeric: tabular-nums; }
+  /* Kept on screen rather than hidden. A display:none video is not reliably
+     decoded, so drawing from one can yield black frames or nothing at all —
+     and it also removes the one glance that says whether capture is alive. */
+  #preview { width: 260px; border: 1px solid #333; border-radius: 8px; margin-top: 16px; background: #000; }
 </style>
 
 <main>
@@ -56,6 +60,8 @@
   <button id="stop" class="stop" disabled>Stop</button>
 
   <div id="status"></div>
+  <div id="sent"></div>
+  <video id="preview" autoplay muted playsinline></video>
 
   <fieldset style="margin-top: 20px;">
     <legend>Measured</legend>
@@ -72,18 +78,33 @@
   </fieldset>
 </main>
 
-<video id="video" autoplay muted playsinline></video>
 <canvas id="canvas" style="display:none"></canvas>
 
 <script>
 const el = (id) => document.getElementById(id);
-const video = el("video");
+const video = el("preview");
+
+/**
+ * Nothing here may fail quietly.
+ *
+ * The first version of this page reported "sharing" while sending nothing: the
+ * browser's own indicator was on, the relay never received a frame, and the page
+ * said neither. Every path that can throw now ends up on screen.
+ */
+function fail(where, error) {
+  el("status").textContent = `${where}: ${error?.message ?? error}`;
+  console.error(where, error);
+}
+
+window.addEventListener("unhandledrejection", (event) => fail("Unhandled", event.reason));
+window.addEventListener("error", (event) => fail("Error", event.error ?? event.message));
 const canvas = el("canvas");
 const context = canvas.getContext("2d", { alpha: false });
 
 let stream = null;
 let running = false;
 let clockOffset = 0;
+let sentCount = 0;
 
 // Rolling windows rather than totals: a number that averages over the whole
 // session hides the thing you are trying to see, which is what it is doing now.
@@ -139,18 +160,32 @@ async function start() {
   }
 
   video.srcObject = stream;
-  await video.play();
+  // A rejected play() is what a screen that shares but never sends looks like,
+  // so it is reported rather than allowed to abandon the rest of this function.
+  try {
+    await video.play();
+  } catch (error) {
+    fail("The captured stream would not play", error);
+    stop();
+    return;
+  }
 
   // The browser stops the stream when the person presses the system's own
   // "stop sharing" button, and the loop has to notice rather than spin.
   stream.getVideoTracks()[0].addEventListener("ended", stop);
 
-  await syncClock();
+  try {
+    await syncClock();
+  } catch (error) {
+    fail("Could not read the server clock", error);
+    stop();
+    return;
+  }
 
   el("start").disabled = true;
   el("stop").disabled = false;
   running = true;
-  loop();
+  loop().catch((error) => { fail("Sending stopped", error); stop(); });
 }
 
 function stop() {
@@ -174,7 +209,10 @@ async function loop() {
 
     const width = video.videoWidth;
     const height = video.videoHeight;
-    if (width === 0 || height === 0) continue;
+    if (width === 0 || height === 0) {
+      el("status").textContent = "The shared stream has no picture yet — waiting for the first frame.";
+      continue;
+    }
 
     const scale = Math.min(1, Number(el("edge").value) / Math.max(width, height));
     canvas.width = Math.round(width * scale);
@@ -187,7 +225,11 @@ async function loop() {
       canvas.toBlob(resolve, "image/jpeg", Number(el("quality").value) / 100),
     );
     note(recent.encode, performance.now() - encodeStart);
-    if (!blob || !running) continue;
+    if (!running) break;
+    if (!blob) {
+      el("status").textContent = "The browser produced no JPEG from the captured frame.";
+      continue;
+    }
 
     // One request in flight at a time. M4's clearest finding was that sending
     // faster than the far end accepts does not lose frames, it queues them, and
@@ -204,7 +246,8 @@ async function loop() {
         body: blob,
       });
       if (!response.ok) {
-        el("status").textContent = `Server refused the frame: ${response.status} ${(await response.json()).error ?? ""}`;
+        const detail = await response.text();
+        el("status").textContent = `Server refused the frame: ${response.status} ${detail}`;
         if (response.status === 401) { stop(); return; }
         continue;
       }
@@ -216,6 +259,9 @@ async function loop() {
     note(recent.bytes, blob.size);
     note(recent.sent, Date.now());
 
+    sentCount += 1;
+    el("status").textContent = "";
+    el("sent").textContent = `${sentCount} frames accepted by the relay`;
     render(width, height);
   }
 }

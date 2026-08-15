@@ -26,6 +26,17 @@ const LONG_POLL_MS = 10_000;
 /** Refuses anything that is not plausibly one frame. */
 const MAX_FRAME_BYTES = 4 * 1024 * 1024;
 
+/**
+ * How old the newest frame may be before the relay treats it as no frame.
+ *
+ * A sender running at any rate replaces this several times a second, even on a
+ * screen that is not changing, so a frame this old means the sender stopped.
+ * Handing it over anyway shows a picture of the past as though it were the
+ * present, which is the fault M4 ruled out on the native path and the same one
+ * that made a stale mirror look like a working one here.
+ */
+const STALE_MS = 5_000;
+
 type Frame = {
   bytes: Uint8Array;
   sequence: number;
@@ -82,9 +93,9 @@ export async function GET(request: Request): Promise<Response> {
   // Held open rather than answered empty, so the viewer gets the next frame the
   // instant it lands instead of on its own polling rhythm. Polling would put a
   // delay into the measurement that belongs to the instrument, not the path.
-  const frame = relay.frame && relay.frame.sequence > known
-    ? relay.frame
-    : await waitForFrame(known);
+  const held = relay.frame;
+  const usable = held && held.sequence > known && Date.now() - held.receivedAt < STALE_MS;
+  const frame = usable ? held : await waitForFrame(known);
 
   if (!frame) return new Response(null, { status: 204 });
 

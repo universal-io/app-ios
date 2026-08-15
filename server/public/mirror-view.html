@@ -28,6 +28,11 @@
   .stat b { display: block; font-size: 19px; font-variant-numeric: tabular-nums; }
   .stat span { font-size: 10px; color: #999; text-transform: uppercase; letter-spacing: .04em; }
   .pass { color: #4ade80; } .fail { color: #f87171; }
+  #message {
+    position: fixed; left: 12px; right: 12px; top: calc(12px + env(safe-area-inset-top));
+    padding: 10px 14px; border-radius: 10px; background: rgba(30, 20, 20, .9);
+    color: #f8b4b4; font-size: 13px; white-space: pre-wrap;
+  }
   #setup { position: fixed; inset: 0; display: grid; place-content: center; gap: 12px; padding: 24px; background: #000; }
   input { background: #1c1c1c; color: #eee; border: 1px solid #444; border-radius: 8px; padding: 12px; font: inherit; }
   button { font: inherit; padding: 12px 20px; border-radius: 8px; border: 0; background: #2f6fed; color: #fff; }
@@ -35,6 +40,8 @@
 </style>
 
 <img id="screen" alt="">
+
+<div id="message" hidden></div>
 
 <div id="panel" hidden>
   <div class="stat"><b id="mLatency">—</b><span>one way</span></div>
@@ -58,6 +65,19 @@ const LATENCY_BUDGET_MS = 300;
 let clockOffset = 0;
 let frames = 0;
 const recent = { latency: [], arrivals: [], bytes: [] };
+
+/**
+ * A phone held up to a black screen cannot tell "the sender is not sending"
+ * from "this page gave up". Both now say so.
+ */
+function say(text) {
+  const box = el("message");
+  box.hidden = !text;
+  box.textContent = text ?? "";
+}
+
+window.addEventListener("unhandledrejection", (event) => say(`Stopped: ${event.reason?.message ?? event.reason}`));
+window.addEventListener("error", (event) => say(`Stopped: ${event.error?.message ?? event.message}`));
 
 function note(list, value) {
   list.push(value);
@@ -101,21 +121,30 @@ async function watch() {
         headers: { "Authorization": `Bearer ${token}` },
         cache: "no-store",
       });
-    } catch {
+    } catch (error) {
+      say(`Cannot reach the server: ${error.message}`);
       await new Promise((resolve) => setTimeout(resolve, 500));
       continue;
     }
 
-    if (response.status === 204) continue;       // nothing new within the hold
+    if (response.status === 204) {
+      // The hold expired with nothing new, which means the sender is not
+      // sending. Saying so is the difference between this and a frozen page.
+      say("Waiting for the Mac to share a screen.");
+      continue;
+    }
     if (response.status === 401) {
+      say("");
       el("note").textContent = "The server did not recognize that token.";
       el("setup").hidden = false;
       return;
     }
     if (!response.ok) {
+      say(`Server returned ${response.status}.`);
       await new Promise((resolve) => setTimeout(resolve, 500));
       continue;
     }
+    say("");
 
     after = Number(response.headers.get("x-sequence")) || after;
     const capturedAt = Number(response.headers.get("x-captured-at"));
@@ -160,8 +189,14 @@ function render() {
 el("start").addEventListener("click", async () => {
   el("setup").hidden = true;
   el("panel").hidden = false;
-  await syncClock();
-  watch();
+  say("Connecting…");
+  try {
+    await syncClock();
+  } catch (error) {
+    say(`Could not read the server clock: ${error.message}`);
+    return;
+  }
+  watch().catch((error) => say(`Stopped watching: ${error.message}`));
 });
 
 const params = new URLSearchParams(location.search);
