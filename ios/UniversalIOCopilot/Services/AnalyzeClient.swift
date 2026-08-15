@@ -22,6 +22,10 @@ struct AnalyzeClient {
         var mediaType: String = "image/jpeg"
         var question: String?
         var tapPoint: CGPoint?
+        /// The box enclosing a ring drawn around something, in the image's
+        /// normalized space. Set instead of `tapPoint` when the person asked
+        /// about an area rather than a single control.
+        var region: CGRect?
         var turns: [Turn] = []
         var contextPackID: String?
         var sourceKind: String = "camera"
@@ -194,6 +198,14 @@ struct AnalyzeClient {
         }
         if let tap = request.tapPoint {
             body["tap_point"] = ["x": tap.x, "y": tap.y]
+        }
+        if let region = request.region {
+            body["region"] = [
+                "x": region.minX,
+                "y": region.minY,
+                "w": region.width,
+                "h": region.height,
+            ]
         }
         if let pack = request.contextPackID {
             body["context_pack_id"] = pack

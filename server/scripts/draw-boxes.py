@@ -40,6 +40,29 @@ def draw(folder: Path) -> int:
     canvas = ImageDraw.Draw(image)
     stroke = max(3, width // 300)
 
+    # Where the person touched, on the same picture as the answer. Without it a
+    # box that looks wrong cannot be told from a tap that arrived in the wrong
+    # place, which are opposite faults.
+    tap = result.get("tap_point")
+    if tap:
+        x, y = tap["x"] * width, tap["y"] * height
+        radius = max(10, width // 60)
+        canvas.ellipse(
+            [x - radius, y - radius, x + radius, y + radius],
+            outline=(0, 200, 255),
+            width=stroke,
+        )
+        canvas.line([x - radius, y, x + radius, y], fill=(0, 200, 255), width=1)
+        canvas.line([x, y - radius, x, y + radius], fill=(0, 200, 255), width=1)
+        print(f"  tapped: x={tap['x']:.3f} y={tap['y']:.3f} -> pixels ({x:.0f}, {y:.0f})")
+
+    region = result.get("region")
+    if region:
+        left, top = region["x"] * width, region["y"] * height
+        right, bottom = left + region["w"] * width, top + region["h"] * height
+        canvas.rectangle([left, top, right, bottom], outline=(0, 200, 255), width=stroke)
+        print(f"  circled: ({left:.0f}, {top:.0f}) to ({right:.0f}, {bottom:.0f})")
+
     for annotation in result.get("annotations", []):
         box = annotation["box"]
         left, top = box["x"] * width, box["y"] * height

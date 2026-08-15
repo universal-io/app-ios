@@ -60,7 +60,7 @@ final class AnalysisSession {
         phase = .failed(reason)
     }
 
-    func analyze(imageData: Data, tapPoint: CGPoint?) {
+    func analyze(imageData: Data, tapPoint: CGPoint?, region: CGRect? = nil) {
         guard let captured = UIImage(data: imageData) else {
             phase = .failed("The captured photo could not be read.")
             return
@@ -99,6 +99,7 @@ final class AnalysisSession {
                 image: uploadData,
                 question: question.isEmpty ? nil : question,
                 tapPoint: tapPoint,
+                region: region,
                 turns: turns,
                 contextPackID: contextPackID,
                 sourceKind: sourceKind,

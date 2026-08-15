@@ -41,6 +41,12 @@ export type AnalyzeRequest = {
   image_media_type?: string;
   question?: string;
   tap_point?: { x: number; y: number };
+  /**
+   * What the person drew a ring around, as the box enclosing their stroke. A
+   * point says "this control"; a region says "whatever is in here", which is how
+   * someone asks about a group of things they have no name for.
+   */
+  region?: Box;
   turns?: Turn[];
   context_pack_id?: string;
   source?: AnalyzeSource;

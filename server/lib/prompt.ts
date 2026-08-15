@@ -68,10 +68,23 @@ export function buildUserContent(
     );
   }
 
+  if (request.region) {
+    const { x, y, w, h } = request.region;
+    lines.push(
+      `The person drew a ring around the area x=${x.toFixed(3)}, y=${y.toFixed(3)}, `
+        + `width=${w.toFixed(3)}, height=${h.toFixed(3)} (fractions of the image, from the `
+        + `top-left). Everything inside that area is the subject. Treat the rest of the screen `
+        + `as context for it, and point only at things within it unless the answer genuinely `
+        + `requires sending them somewhere else.`,
+    );
+  }
+
   if (hasCandidates) lines.push(CANDIDATES_RULE);
 
   if (request.question?.trim()) {
     lines.push(`Their question: ${request.question.trim()}`);
+  } else if (request.region) {
+    lines.push("They did not type a question. Explain what they circled and what it does.");
   } else if (request.tap_point) {
     lines.push("They did not type a question. Explain what they tapped and what it does.");
   } else {

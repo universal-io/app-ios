@@ -129,6 +129,11 @@ export async function POST(request: Request): Promise<Response> {
             stored: facts.stored,
             exif_orientation: facts.orientation,
             reported_to_model: size,
+            // Kept beside the boxes because "it explained something next to
+            // what I touched" is only answerable by seeing both on the same
+            // picture: the point that arrived, and where the answer pointed.
+            tap_point: body.tap_point ?? null,
+            region: body.region ?? null,
             annotations: result.annotations,
           });
         }
@@ -179,6 +184,13 @@ function validate(body: AnalyzeRequest): string | null {
     if (typeof x !== "number" || typeof y !== "number") {
       return "tap_point must have numeric x and y.";
     }
+  }
+  if (body.region) {
+    const { x, y, w, h } = body.region;
+    if ([x, y, w, h].some((value) => typeof value !== "number")) {
+      return "region must have numeric x, y, w and h.";
+    }
+    if (w <= 0 || h <= 0) return "region must have a positive width and height.";
   }
   return null;
 }
