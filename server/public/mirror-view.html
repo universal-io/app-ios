@@ -16,6 +16,11 @@
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
+  /* An id selector that sets `display` outranks the browser's own rule for the
+     hidden attribute, so hiding these by script did nothing: the setup sheet
+     stayed over the whole screen, and every message this page had to give was
+     painted behind it. Pressing Watch looked like pressing nothing. */
+  [hidden] { display: none !important; }
   body { margin: 0; background: #000; color: #eee; font: 14px/1.4 -apple-system, system-ui, sans-serif; }
   #screen { width: 100vw; height: 100vh; object-fit: contain; display: block; background: #000; }
   #panel {
