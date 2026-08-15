@@ -1,0 +1,169 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mirror</title>
+
+<!--
+  The receiving half, opened on the phone. It is a web page rather than the app
+  on purpose: the unknown being measured is the transport, and putting the
+  native side in first would mean building against a path that might not clear
+  the bar. If the numbers here pass, wiring it into the app is ordinary work.
+
+  Open it by the Mac's LAN address. Receiving needs nothing privileged, so the
+  plain http origin that screen capture would have refused is fine here.
+-->
+
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #000; color: #eee; font: 14px/1.4 -apple-system, system-ui, sans-serif; }
+  #screen { width: 100vw; height: 100vh; object-fit: contain; display: block; background: #000; }
+  #panel {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+    background: rgba(20, 20, 20, .82); backdrop-filter: blur(12px);
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px 10px;
+  }
+  .stat { text-align: center; }
+  .stat b { display: block; font-size: 19px; font-variant-numeric: tabular-nums; }
+  .stat span { font-size: 10px; color: #999; text-transform: uppercase; letter-spacing: .04em; }
+  .pass { color: #4ade80; } .fail { color: #f87171; }
+  #setup { position: fixed; inset: 0; display: grid; place-content: center; gap: 12px; padding: 24px; background: #000; }
+  input { background: #1c1c1c; color: #eee; border: 1px solid #444; border-radius: 8px; padding: 12px; font: inherit; }
+  button { font: inherit; padding: 12px 20px; border-radius: 8px; border: 0; background: #2f6fed; color: #fff; }
+  #note { color: #888; font-size: 12px; max-width: 320px; }
+</style>
+
+<img id="screen" alt="">
+
+<div id="panel" hidden>
+  <div class="stat"><b id="mLatency">—</b><span>one way</span></div>
+  <div class="stat"><b id="mFps">—</b><span>fps</span></div>
+  <div class="stat"><b id="mRate">—</b><span>Mbps</span></div>
+  <div class="stat"><b id="mFrames">0</b><span>frames</span></div>
+</div>
+
+<div id="setup">
+  <input id="token" type="text" value="dev-local-token" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <button id="start">Watch</button>
+  <div id="note">Start the sender on the Mac first, at http://localhost:3000/mirror-send.html</div>
+</div>
+
+<script>
+const el = (id) => document.getElementById(id);
+
+/** The bar M4 set for the native path, applied unchanged to this one. */
+const LATENCY_BUDGET_MS = 300;
+
+let clockOffset = 0;
+let frames = 0;
+const recent = { latency: [], arrivals: [], bytes: [] };
+
+function note(list, value) {
+  list.push(value);
+  if (list.length > 30) list.shift();
+}
+
+const median = (list) => {
+  if (list.length === 0) return null;
+  const sorted = [...list].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+};
+
+async function syncClock() {
+  const samples = [];
+  for (let i = 0; i < 5; i += 1) {
+    const before = Date.now();
+    const response = await fetch("/api/mirror/time", { cache: "no-store" });
+    const after = Date.now();
+    const { now } = await response.json();
+    samples.push({ offset: now - (before + after) / 2, spread: after - before });
+  }
+  samples.sort((a, b) => a.spread - b.spread);
+  clockOffset = samples[0].offset;
+}
+
+async function watch() {
+  const token = el("token").value.trim();
+  const screen = el("screen");
+  let after = 0;
+  let previousURL = null;
+
+  // Kept awake by nothing but the request in flight; a phone that sleeps here
+  // reports a dead link, which is exactly the false failure M4 spent an
+  // afternoon on.
+  try { await navigator.wakeLock?.request("screen"); } catch { /* not fatal */ }
+
+  while (true) {
+    let response;
+    try {
+      response = await fetch(`/api/mirror/frame?after=${after}`, {
+        headers: { "Authorization": `Bearer ${token}` },
+        cache: "no-store",
+      });
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      continue;
+    }
+
+    if (response.status === 204) continue;       // nothing new within the hold
+    if (response.status === 401) {
+      el("note").textContent = "The server did not recognize that token.";
+      el("setup").hidden = false;
+      return;
+    }
+    if (!response.ok) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      continue;
+    }
+
+    after = Number(response.headers.get("x-sequence")) || after;
+    const capturedAt = Number(response.headers.get("x-captured-at"));
+    const blob = await response.blob();
+
+    const url = URL.createObjectURL(blob);
+    await new Promise((resolve) => {
+      screen.onload = resolve;
+      screen.onerror = resolve;
+      screen.src = url;
+    });
+    if (previousURL) URL.revokeObjectURL(previousURL);
+    previousURL = url;
+
+    // Measured at the moment the picture is on screen rather than when the
+    // bytes arrived: decode and paint are part of what the person waits for.
+    const shownAt = Date.now() + clockOffset;
+    if (Number.isFinite(capturedAt)) note(recent.latency, shownAt - capturedAt);
+    note(recent.arrivals, Date.now());
+    note(recent.bytes, blob.size);
+    frames += 1;
+    render();
+  }
+}
+
+function render() {
+  const latency = median(recent.latency);
+  const times = recent.arrivals;
+  const span = times.length > 1 ? (times[times.length - 1] - times[0]) / 1000 : 0;
+  const fps = span > 0 ? (times.length - 1) / span : 0;
+  const bytes = median(recent.bytes) ?? 0;
+
+  const latencyEl = el("mLatency");
+  latencyEl.textContent = latency === null ? "—" : `${latency.toFixed(0)}`;
+  latencyEl.className = latency === null ? "" : (latency <= LATENCY_BUDGET_MS ? "pass" : "fail");
+
+  el("mFps").textContent = fps.toFixed(1);
+  el("mRate").textContent = ((bytes * 8 * fps) / 1e6).toFixed(1);
+  el("mFrames").textContent = String(frames);
+}
+
+el("start").addEventListener("click", async () => {
+  el("setup").hidden = true;
+  el("panel").hidden = false;
+  await syncClock();
+  watch();
+});
+
+const params = new URLSearchParams(location.search);
+if (params.get("token")) el("token").value = params.get("token");
+</script>
