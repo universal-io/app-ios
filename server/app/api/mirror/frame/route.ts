@@ -16,45 +16,13 @@
  */
 
 import { authenticate } from "@/lib/auth";
+import { acceptFrame, freshFrame, waitForFrame } from "@/lib/mirror-relay";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** How long a viewer's request waits for a new frame before returning empty. */
-const LONG_POLL_MS = 10_000;
-
 /** Refuses anything that is not plausibly one frame. */
 const MAX_FRAME_BYTES = 4 * 1024 * 1024;
-
-/**
- * How old the newest frame may be before the relay treats it as no frame.
- *
- * A sender running at any rate replaces this several times a second, even on a
- * screen that is not changing, so a frame this old means the sender stopped.
- * Handing it over anyway shows a picture of the past as though it were the
- * present, which is the fault M4 ruled out on the native path and the same one
- * that made a stale mirror look like a working one here.
- */
-const STALE_MS = 5_000;
-
-type Frame = {
-  bytes: Uint8Array;
-  sequence: number;
-  /** When the sender drew it, on the server's timeline. */
-  capturedAt: number;
-  receivedAt: number;
-};
-
-type Relay = {
-  frame: Frame | null;
-  sequence: number;
-  waiters: Array<(frame: Frame) => void>;
-};
-
-// On globalThis so a hot reload in dev does not silently start a second relay
-// and leave the viewer waiting on the empty one.
-const globalRelay = globalThis as typeof globalThis & { __uioMirrorRelay?: Relay };
-const relay: Relay = (globalRelay.__uioMirrorRelay ??= { frame: null, sequence: 0, waiters: [] });
 
 export async function POST(request: Request): Promise<Response> {
   const auth = authenticate(request);
@@ -64,23 +32,10 @@ export async function POST(request: Request): Promise<Response> {
   if (body.byteLength === 0) return json(400, { error: "Empty frame." });
   if (body.byteLength > MAX_FRAME_BYTES) return json(413, { error: "Frame too large." });
 
-  const capturedAt = Number(request.headers.get("x-captured-at"));
-  const now = Date.now();
+  const stamped = Number(request.headers.get("x-captured-at"));
+  const frame = acceptFrame(new Uint8Array(body), Number.isFinite(stamped) ? stamped : null);
 
-  relay.sequence += 1;
-  relay.frame = {
-    bytes: new Uint8Array(body),
-    sequence: relay.sequence,
-    capturedAt: Number.isFinite(capturedAt) ? capturedAt : now,
-    receivedAt: now,
-  };
-
-  // Everyone waiting gets this frame, and nobody is left holding a request that
-  // outlives the frame it was waiting for.
-  const waiting = relay.waiters.splice(0);
-  for (const resolve of waiting) resolve(relay.frame);
-
-  return json(200, { sequence: relay.frame.sequence, received_at: now });
+  return json(200, { sequence: frame.sequence, received_at: frame.receivedAt });
 }
 
 export async function GET(request: Request): Promise<Response> {
@@ -90,13 +45,7 @@ export async function GET(request: Request): Promise<Response> {
   const after = Number(new URL(request.url).searchParams.get("after") ?? "0");
   const known = Number.isFinite(after) ? after : 0;
 
-  // Held open rather than answered empty, so the viewer gets the next frame the
-  // instant it lands instead of on its own polling rhythm. Polling would put a
-  // delay into the measurement that belongs to the instrument, not the path.
-  const held = relay.frame;
-  const usable = held && held.sequence > known && Date.now() - held.receivedAt < STALE_MS;
-  const frame = usable ? held : await waitForFrame(known);
-
+  const frame = freshFrame(known) ?? (await waitForFrame(known));
   if (!frame) return new Response(null, { status: 204 });
 
   return new Response(frame.bytes as unknown as BodyInit, {
@@ -109,23 +58,6 @@ export async function GET(request: Request): Promise<Response> {
       "x-received-at": String(frame.receivedAt),
       "x-served-at": String(Date.now()),
     },
-  });
-}
-
-function waitForFrame(after: number): Promise<Frame | null> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      const index = relay.waiters.indexOf(deliver);
-      if (index >= 0) relay.waiters.splice(index, 1);
-      resolve(null);
-    }, LONG_POLL_MS);
-
-    function deliver(frame: Frame) {
-      clearTimeout(timer);
-      resolve(frame.sequence > after ? frame : null);
-    }
-
-    relay.waiters.push(deliver);
   });
 }
 
